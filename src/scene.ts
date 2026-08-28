@@ -11,6 +11,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { ColorGradePass } from './post/ColorGradePass.js';
 
 export function createScene(container) {
   /* ---------- 渲染器 ---------- */
@@ -50,11 +51,14 @@ export function createScene(container) {
   const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .38, .5, 1.05);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
+  const colorGradePass = new ColorGradePass();
+  composer.addPass(colorGradePass);
   const fxaaPass = new ShaderPass(FXAAShader);
   composer.addPass(fxaaPass);
   function syncPost() {
     const pr = renderer.getPixelRatio();
     fxaaPass.material.uniforms['resolution'].value.set(1 / (innerWidth * pr), 1 / (innerHeight * pr));
+    colorGradePass.material.uniforms['uResolution'].value.set(innerWidth * pr, innerHeight * pr);
   }
   syncPost();
 
@@ -81,16 +85,30 @@ export function createScene(container) {
   /* ================= 机库展台 ================= */
   const hangar = new THREE.Group(); hangar.visible = true; scene.add(hangar);
   {
-    // 地盘：深色亚光实验室地板（轻微反射，避免环境反光过曝）
+    // 地盘：深色亚光混凝土/树脂地面，弱化高光，避免喧宾夺主
     const disc = new THREE.Mesh(
       new THREE.CircleGeometry(11, 96),
       new THREE.MeshPhysicalMaterial({
-        color: 0x070d17, metalness: .35, roughness: .62,
-        clearcoat: .15, clearcoatRoughness: .5, envMapIntensity: .5,
+        color: 0x0a1017, metalness: .12, roughness: .92,
+        clearcoat: .04, clearcoatRoughness: .85, envMapIntensity: .18,
       })
     );
     disc.rotation.x = -Math.PI / 2; disc.receiveShadow = true;
     hangar.add(disc);
+    // 接触阴影：让导弹"坐"在地面上
+    const csCanvas = document.createElement('canvas'); csCanvas.width = csCanvas.height = 256;
+    const csc = csCanvas.getContext('2d');
+    const csg = csc.createRadialGradient(128, 128, 0, 128, 128, 128);
+    csg.addColorStop(0, 'rgba(0,0,0,.55)'); csg.addColorStop(.55, 'rgba(0,0,0,.18)'); csg.addColorStop(1, 'rgba(0,0,0,0)');
+    csc.fillStyle = csg; csc.fillRect(0, 0, 256, 256);
+    const csTex = new THREE.CanvasTexture(csCanvas);
+    const contactShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(5.8, 5.8),
+      new THREE.MeshBasicMaterial({ map: csTex, transparent: true, opacity: .55, depthWrite: false, blending: THREE.MultiplyBlending })
+    );
+    contactShadow.rotation.x = -Math.PI / 2; contactShadow.position.y = .02;
+    contactShadow.name = 'contactShadow';
+    hangar.add(contactShadow);
     // 同心刻度环
     const rings = new THREE.Group();
     const rMat = new THREE.LineBasicMaterial({ color: 0x22436b, transparent: true, opacity: .4 });
@@ -133,9 +151,9 @@ export function createScene(container) {
     dust.name = 'dust';
     hangar.add(dust);
 
-    // 全息投影基座：从地面投向弹体的光锥 + 投射盘
+    // 全息投影基座：从地面投向弹体的光锥 + 投射盘（刻意压暗，避免抢弹体主体戏）
     const beamMat = new THREE.MeshBasicMaterial({
-      color: 0xffb454, transparent: true, opacity: .05,
+      color: 0xffb454, transparent: true, opacity: .028,
       blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
     });
     const beam = new THREE.Mesh(new THREE.CylinderGeometry(.42, 1.15, 1.5, 40, 1, true), beamMat);
@@ -143,14 +161,14 @@ export function createScene(container) {
     hangar.add(beam);
     const projBase = new THREE.Mesh(
       new THREE.CylinderGeometry(1.18, 1.34, .1, 48),
-      new THREE.MeshPhysicalMaterial({ color: 0x141d2b, metalness: .7, roughness: .3, clearcoat: .6 })
+      new THREE.MeshPhysicalMaterial({ color: 0x0d131c, metalness: .28, roughness: .58, clearcoat: .18, envMapIntensity: .3 })
     );
     projBase.position.y = .05; hangar.add(projBase);
     const projGlow = new THREE.Mesh(
       new THREE.RingGeometry(.5, 1.12, 48),
-      new THREE.MeshBasicMaterial({ color: 0xffb454, transparent: true, opacity: .16, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: 0xffb454, transparent: true, opacity: .075, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false })
     );
-    projGlow.rotation.x = -Math.PI / 2; projGlow.position.y = .105; projGlow.name = 'projGlow';
+    projGlow.rotation.x = -Math.PI / 2; projGlow.position.y = .11; projGlow.name = 'projGlow';
     hangar.add(projGlow);
   }
 
@@ -220,6 +238,7 @@ export function createScene(container) {
       dust.rotation.y += dt * .014;
       dust.position.y = Math.sin(performance.now() * .00022) * .18;
     }
+    colorGradePass.material.uniforms['uTime'].value = performance.now() * 0.001;
     composer.render();
   }
 
@@ -237,7 +256,7 @@ export function createScene(container) {
     flyCam, update, keyLight: key,
     setWorldMode(on) {
       hangar.visible = !on; world.visible = !!on;
-      scene.fog.density = on ? 0.000016 : 0.012;
+      (scene.fog as THREE.FogExp2).density = on ? 0.000016 : 0.012;
       key.castShadow = !on;
       if (!on) { hemi.intensity = .55; rim.intensity = 1.15; }
       else { hemi.intensity = .32; rim.intensity = .5; }
@@ -251,7 +270,8 @@ export function createScene(container) {
     },
     shakeAt(v = .28) { shake.amp = Math.max(shake.amp, v); },
     snapView(pos, tgt) {
-      camera.position.set(...pos); controls.target.set(...tgt);
+      camera.position.set(pos[0], pos[1], pos[2]);
+      controls.target.set(tgt[0], tgt[1], tgt[2]);
       camTween = null;
     },
   };

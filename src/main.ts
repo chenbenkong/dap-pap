@@ -8,7 +8,10 @@ import { buildMissile } from './parts';
 import { Plume, Trail, Boom, buildShip } from './effects';
 import { StrikeSim, MissionSim, predictedIntercept } from './flight';
 
-const $ = s => document.querySelector(s);
+/** 取单个元素（本教具大量直接访问 DOM 属性，统一放宽为 any） */
+const $ = (s: string): any => document.querySelector(s);
+/** 取元素集合，并统一转成 HTMLElement[]，便于访问 dataset 等属性 */
+const $$ = (s: string): any[] => Array.prototype.slice.call(document.querySelectorAll(s));
 if (window.__MLAB_BOOTED) {
   throw new Error('[导弹实验台] 检测到重复初始化，已跳过本次启动。');
 }
@@ -19,7 +22,7 @@ const DEG = Math.PI / 180;
 /* ============================================================ */
 /*                       应 用 状 态                             */
 /* ============================================================ */
-const S = {
+const S: any = {
   chapter: 1,
   labelsOn: true, spinOn: false, cutawayOn: false,
   explore: .0,            // 爆炸度
@@ -30,6 +33,7 @@ const S = {
   strikeState: 'idle',
   // 任务
   missionPlaying: false, mt: 0, spd: 1, missionEnded: false,
+  missionChartsDirty: false,
 };
 
 /* ============================================================ */
@@ -273,7 +277,7 @@ const CHAPTERS = [
 ];
 window.__focusPart = { key: null };
 
-function goChapter(n, opts = {}) {
+function goChapter(n, opts: any = {}) {
   n = Math.max(1, Math.min(4, n));
   const changed = n !== S.chapter;
   S.chapter = n;
@@ -325,7 +329,7 @@ function goChapter(n, opts = {}) {
 }
 
 function setPanelTab(tab, unitText) {
-  document.querySelectorAll('.panel-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  $$('.panel-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   $('#tabParts').style.display = tab === 'parts' ? '' : 'none';
   $('#tabTele').style.display = tab === 'tele' ? '' : 'none';
   if (unitText) $('#panelHeadUnit').textContent = unitText;
@@ -378,7 +382,7 @@ function selectPart(key, { fly = false } = {}) {
   window.__focusPart.key = key;
   const p = M.parts[key];
   // 卡片态
-  document.querySelectorAll('#tabParts .station-card').forEach(c => {
+  $$('#tabParts .station-card').forEach(c => {
     c.classList.toggle('active', c.dataset.key === key);
     c.classList.toggle('open', c.dataset.key === key);
     if (c.dataset.key === key) c.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -386,10 +390,9 @@ function selectPart(key, { fly = false } = {}) {
   // 高亮
   M.allMats.forEach(m => { if (m.emissiveIntensity !== undefined && m.userData.baseEm === undefined) m.userData.baseEm = m.emissiveIntensity ?? 0; });
   M.shellMats.forEach(() => {});
-  M.parts[key].meshes.forEach(()=>{});
   // 该部件材质发光脉冲
   const grp = p.anchor.parent;
-  const mats = new Set();
+  const mats = new Set<any>();
   grp.traverse(o => { if (o.isMesh && o.material) mats.add(o.material); });
   mats.forEach(m => { m.emissive = m.emissive || new THREE.Color(0); m.emissive.setHex(0xffb454); });
   if (fly) {
@@ -678,6 +681,7 @@ function enterMission(snap = true) {
   stopAllSims();
   viewer.setWorldMode(true);
   ensureMissionVisuals();
+  ensureStrikeVisuals();      // flyMissile / plumeWorld 在第3章初始化，直接跳第4章时必须有
   hideStrikeVisuals();
   aimMark.position.set(missionSim.params.aimX, 0, 0);
   // 预积分
@@ -778,7 +782,7 @@ function seekMission(tt) {
   const s = missionSim.sampleAt(S.mt);
   flyMissile.visible = true;
   flyMissile.position.set(s.px, s.py, s.pz);
-  const nxtIdx = Math.min(Math.round(S.mt / MS.dt) + 1, sm.length - 1);
+  const nxtIdx = Math.min(Math.round(S.mt / missionSim.dt) + 1, sm.length - 1);
   const nxt = sm[nxtIdx];
   const dv = new THREE.Vector3(nxt.px - s.px, nxt.py - s.py, nxt.pz - s.pz);
   if (dv.lengthSq() > 1) orientAlong(flyMissile, dv);
@@ -943,12 +947,12 @@ function bindUI() {
     $('#pauseBtn').textContent = S.missionPlaying ? '暂停' : '继续';
     const s = missionSim.sampleAt(S.mt); if (s) missionUIOnce(s);
   });
-  document.querySelectorAll('.spd-btn').forEach(b => b.addEventListener('click', () => {
-    document.querySelectorAll('.spd-btn').forEach(x => x.classList.remove('on'));
+  $$('.spd-btn').forEach(b => b.addEventListener('click', () => {
+    $$('.spd-btn').forEach(x => x.classList.remove('on'));
     b.classList.add('on'); S.spd = +b.dataset.spd;
   }));
-  document.querySelectorAll('[data-cam]').forEach(b => b.addEventListener('click', () => {
-    document.querySelectorAll('[data-cam]').forEach(x => x.classList.remove('on'));
+  $$('[data-cam]').forEach(b => b.addEventListener('click', () => {
+    $$('[data-cam]').forEach(x => x.classList.remove('on'));
     b.classList.add('on'); curMissionCam = b.dataset.cam;
     if (curMissionCam === 'globalView') {
       viewer.flyCam([-3600, 11000, 17500], [missionSim.meta.range * 500, 5500, 0], 1.4);
@@ -967,14 +971,14 @@ function bindUI() {
     $('#dataPanel').classList.remove('closed');
     $('#panelRail').style.display = 'none';
   });
-  document.querySelectorAll('.panel-tab').forEach(b => b.addEventListener('click', () => {
+  $$('.panel-tab').forEach(b => b.addEventListener('click', () => {
     if (S.chapter <= 2 && b.dataset.tab === 'tele') return;   // 第1/2章暂无遥测
-    setPanelTab(b.dataset.tab);
+    setPanelTab(b.dataset.tab, undefined);
   }));
 
   // 键盘
   addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT') return;
+    if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     if (e.key === 'ArrowRight') goChapter(S.chapter + 1);
     else if (e.key === 'ArrowLeft') goChapter(S.chapter - 1);
     else if (e.code === 'Space') {
@@ -1090,12 +1094,17 @@ async function boot() {
   window.__MLAB_READY = true;
   window.dispatchEvent(new Event('mLabReady'));
   goChapter(1, { flash: false, snap: true });
-  // 调试/分享视角：#view=相机x,y,z|目标x,y,z
+  // 深链：#chapter=N 直达章节（验证/分享用），#view= 覆盖机位
+  const mc = location.hash.match(/chapter=([1-4])/);
+  if (mc && mc[1] !== '1') goChapter(+mc[1], { flash: false, snap: true });
   const mv = location.hash.match(/view=([-\d.,|]+)/);
   if (mv) {
     const [p, t] = mv[1].split('|').map(s => s.split(',').map(Number));
     if (p && p.length === 3) viewer.snapView(p, t || [0, 0, 0]);
   }
+  // 验证/演示：自动触发点火或发射
+  if (/[?&]ignite=1/.test(location.hash)) setTimeout(() => $('#igniteBtn')?.click(), 700);
+  if (/[?&]launch=1/.test(location.hash)) setTimeout(() => $('#launchBtn')?.click(), 700);
   loop();
 }
 

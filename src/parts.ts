@@ -23,53 +23,152 @@ const worldYToCanvasY = y => (1 - (y - BODY_Y0) / (BODY_Y1 - BODY_Y0)) * TH;
 // 主体标注（与 v 对齐的环缝位置，用于画缝线+铆钉）
 const SEAMS = [2.18, 1.84, 1.22, 1.245, 1.13, 1.19, .61, .58, .54, -.95, -2.44, -2.60];
 
+/** 不规则多边形：漆面剥落块 / 划痕块 */
+function chipPoly(ctx, cx, cy, r, n = 7) {
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const ang = i / n * Math.PI * 2;
+    const rr = r * (.52 + Math.random() * .58);
+    const x = cx + Math.cos(ang) * rr, y = cy + Math.sin(ang) * rr;
+    if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+  }
+  ctx.closePath(); ctx.fill();
+}
+
 function makeBodyMaps() {
-  /* ---- albedo ---- */
+  /* ---------- 四张画布：albedo / height / metalness / roughness ---------- */
   const alb = document.createElement('canvas'); alb.width = TW; alb.height = TH;
   const a = alb.getContext('2d');
-  a.fillStyle = '#ccd3da'; a.fillRect(0, 0, TW, TH);
-  // 磨损斑点
-  for (let i = 0; i < 2200; i++) {
-    a.fillStyle = `rgba(${118 + Math.random() * 44 | 0},${124 + Math.random() * 44 | 0},${132 + Math.random() * 44 | 0},${.04 + Math.random() * .09})`;
-    a.beginPath(); a.arc(Math.random() * TW, Math.random() * TH, .4 + Math.random() * 2.2, 0, 7); a.fill();
+  const hcv = document.createElement('canvas'); hcv.width = TW; hcv.height = TH;
+  const h = hcv.getContext('2d');
+  const mcv = document.createElement('canvas'); mcv.width = TW; mcv.height = TH;
+  const mm = mcv.getContext('2d');
+  const rw = 512, rh = 1024;
+  const rgh = document.createElement('canvas'); rgh.width = rw; rgh.height = rh;
+  const g = rgh.getContext('2d');
+
+  /* ---------- 基底：冷灰军械漆 ---------- */
+  a.fillStyle = '#8e969d'; a.fillRect(0, 0, TW, TH);
+  h.fillStyle = 'rgb(128,128,128)'; h.fillRect(0, 0, TW, TH);
+  mm.fillStyle = 'rgb(24,24,24)'; mm.fillRect(0, 0, TW, TH);      // 漆面≈非金属
+  g.fillStyle = 'rgb(112,112,112)'; g.fillRect(0, 0, rw, rh);     // 基础粗糙度 .44
+
+  /* ---------- 整体明暗：前端受光、尾部烟熏 ---------- */
+  {
+    const lg = a.createLinearGradient(0, 0, 0, TH);
+    lg.addColorStop(0, 'rgba(255,255,255,.09)');
+    lg.addColorStop(.42, 'rgba(255,255,255,0)');
+    lg.addColorStop(.80, 'rgba(26,30,36,.10)');
+    lg.addColorStop(1, 'rgba(14,17,22,.30)');
+    a.fillStyle = lg; a.fillRect(0, 0, TW, TH);
   }
-  // 气流方向流痕
-  for (let i = 0; i < 80; i++) {
-    const x = Math.random() * TW;
-    a.strokeStyle = `rgba(96,104,116,${.03 + Math.random() * .05})`;
-    a.lineWidth = 1 + Math.random() * 2;
-    a.beginPath(); a.moveTo(x, Math.random() * TH * .35);
-    a.lineTo(x + (Math.random() - .5) * 10, TH); a.stroke();
-  }
-  // 舱段缝（深色线）+ 铆钉排
-  for (const yw of SEAMS) {
-    const y = worldYToCanvasY(yw);
-    a.strokeStyle = 'rgba(52,60,70,.85)'; a.lineWidth = 3;
-    a.beginPath(); a.moveTo(0, y); a.lineTo(TW, y); a.stroke();
-    a.strokeStyle = 'rgba(255,255,255,.28)'; a.lineWidth = 1;
-    a.beginPath(); a.moveTo(0, y + 2.5); a.lineTo(TW, y + 2.5); a.stroke();
-    // 双排铆钉
-    for (const dy of [-9, 9]) {
-      for (let x = 6; x < TW; x += 14) {
-        if (Math.random() < .28) continue;
-        a.fillStyle = 'rgba(70,78,88,.8)';
-        a.beginPath(); a.arc(x + Math.random() * 2, y + dy, 1.6, 0, 7); a.fill();
-        a.fillStyle = 'rgba(240,244,248,.5)';
-        a.beginPath(); a.arc(x + Math.random() * 2 - .5, y + dy - .6, .7, 0, 7); a.fill();
+
+  /* ---------- 板件级明暗扰动（破除“塑料均质感”） ---------- */
+  {
+    const bands = Array.from(new Set(SEAMS)).sort((p, q) => q - p);
+    const cols = 6;
+    for (let bi = 0; bi < bands.length - 1; bi++) {
+      const yTop = worldYToCanvasY(bands[bi]);
+      const yBot = worldYToCanvasY(bands[bi + 1]);
+      if (yBot - yTop < 4) continue;
+      for (let ci = 0; ci < cols; ci++) {
+        const x0 = ci / cols * TW, x1 = (ci + 1) / cols * TW;
+        const d = (Math.random() - .46) * 22;
+        a.fillStyle = d > 0 ? `rgba(255,255,255,${d / 255})` : `rgba(0,0,0,${-d / 255})`;
+        a.fillRect(x0, yTop, x1 - x0, yBot - yTop);
+        const dr = (Math.random() - .5) * 30;
+        g.fillStyle = dr > 0 ? `rgba(255,255,255,${dr / 255})` : `rgba(0,0,0,${-dr / 255})`;
+        g.fillRect(x0 / 2, yTop / 2, (x1 - x0) / 2, (yBot - yTop) / 2);
       }
     }
   }
-  // 纵向口盖（检修盖板矩形 ×4）
-  for (const [x0, yw, w, h] of [[.12, 1.45, 70, 120], [.55, .05, 84, 150], [.78, -1.45, 70, 120], [.3, -2.0, 60, 90]]) {
+
+  /* ---------- 磨损 / 流痕 / 划痕 ---------- */
+  for (let i = 0; i < 2600; i++) {
+    a.fillStyle = `rgba(${96 + Math.random() * 58 | 0},${102 + Math.random() * 58 | 0},${110 + Math.random() * 58 | 0},${.03 + Math.random() * .1})`;
+    a.beginPath(); a.arc(Math.random() * TW, Math.random() * TH, .4 + Math.random() * 2.4, 0, 7); a.fill();
+  }
+  for (let i = 0; i < 120; i++) {
+    const x = Math.random() * TW, y0 = Math.random() * TH * .55;
+    a.strokeStyle = `rgba(68,76,88,${.03 + Math.random() * .07})`;
+    a.lineWidth = .8 + Math.random() * 2.6;
+    a.beginPath(); a.moveTo(x, y0);
+    a.bezierCurveTo(x + (Math.random() - .5) * 14, y0 + TH * .18,
+      x + (Math.random() - .5) * 20, y0 + TH * .45,
+      x + (Math.random() - .5) * 8, y0 + TH * (.35 + Math.random() * .5));
+    a.stroke();
+  }
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * TW, y = Math.random() * TH, L = 6 + Math.random() * 44;
+    a.strokeStyle = `rgba(234,239,244,${.05 + Math.random() * .13})`; a.lineWidth = .7;
+    a.beginPath(); a.moveTo(x, y); a.lineTo(x + (Math.random() - .5) * L * .28, y + L); a.stroke();
+  }
+
+  /* ---------- 漆面剥落：露出裸金属（albedo + metalness + roughness 同步） ---------- */
+  for (let i = 0; i < 320; i++) {
+    const cx = Math.random() * TW, cy = Math.random() * TH;
+    const r = 1.3 + Math.random() * 5.6;
+    a.fillStyle = 'rgba(50,56,64,.92)'; chipPoly(a, cx, cy, r * 1.32);          // 漆层断面暗边
+    a.fillStyle = 'rgba(204,210,217,.95)'; chipPoly(a, cx, cy, r * .78);         // 亮金属芯
+    mm.fillStyle = 'rgb(234,234,234)'; chipPoly(mm, cx, cy, r * .78);            // 裸金属
+    g.fillStyle = 'rgb(72,72,72)'; chipPoly(g, cx / 2, cy / 2, r * .78 / 2);     // 磨得更光
+    h.fillStyle = 'rgb(102,102,102)'; chipPoly(h, cx, cy, r * .8);               // 凹坑
+  }
+
+  /* ---------- 舱段缝 + 双排铆钉 ---------- */
+  for (const yw of SEAMS) {
     const y = worldYToCanvasY(yw);
-    a.strokeStyle = 'rgba(60,68,78,.7)'; a.lineWidth = 2;
-    a.strokeRect(x0 * TW, y - h / 2, w, h);
-    a.fillStyle = 'rgba(255,255,255,.05)'; a.fillRect(x0 * TW + 2, y - h / 2 + 2, w - 4, h - 4);
-    for (const [cx, cy] of [[x0 * TW + 6, y - h / 2 + 6], [x0 * TW + w - 6, y - h / 2 + 6], [x0 * TW + 6, y + h / 2 - 6], [x0 * TW + w - 6, y + h / 2 - 6]]) {
-      a.fillStyle = 'rgba(70,78,88,.85)'; a.beginPath(); a.arc(cx, cy, 2, 0, 7); a.fill();
+    a.fillStyle = 'rgba(0,0,0,.18)'; a.fillRect(0, y - 6, TW, 4);                // 缝周 AO
+    a.fillStyle = 'rgba(36,42,50,.94)'; a.fillRect(0, y - 2, TW, 4);             // 缝
+    a.fillStyle = 'rgba(255,255,255,.24)'; a.fillRect(0, y + 2.4, TW, 1.6);      // 下缘高光
+    h.fillStyle = 'rgb(64,64,64)'; h.fillRect(0, y - 3, TW, 6);
+    h.fillStyle = 'rgb(154,154,154)'; h.fillRect(0, y - 5, TW, 2); h.fillRect(0, y + 3, TW, 2);
+    g.fillStyle = 'rgb(200,200,200)'; g.fillRect(0, y / 2 - 2, rw, 4);           // 缝内更粗糙
+    for (const dy of [-10, 10]) {
+      for (let x = 6; x < TW; x += 13) {
+        if (Math.random() < .2) continue;
+        const px = x + Math.random() * 2, py = y + dy;
+        a.fillStyle = 'rgba(44,50,58,.88)'; a.beginPath(); a.arc(px, py, 2.1, 0, 7); a.fill();
+        a.fillStyle = 'rgba(226,232,238,.62)'; a.beginPath(); a.arc(px - .6, py - .8, 1.0, 0, 7); a.fill();
+        a.fillStyle = 'rgba(0,0,0,.22)'; a.beginPath(); a.arc(px + .7, py + .9, 1.0, 0, 7); a.fill();
+        mm.fillStyle = 'rgb(214,214,214)'; a.beginPath(); mm.arc(px, py, 1.5, 0, 7); mm.fill();
+        const rg = h.createRadialGradient(px, py, 0, px, py, 3.2);
+        rg.addColorStop(0, 'rgb(218,218,218)'); rg.addColorStop(.7, 'rgb(150,150,150)'); rg.addColorStop(1, 'rgb(128,128,128)');
+        h.fillStyle = rg; h.beginPath(); h.arc(px, py, 3.2, 0, 7); h.fill();
+      }
     }
   }
-  // ---- 喷涂标识 ----
+  /* ---------- 纵向检修口盖 ×4（含内凹面 + 螺钉 + 拆装痕迹） ---------- */
+  for (const [u0, yw, w, hh] of [[.12, 1.45, 70, 120], [.55, .05, 84, 150], [.78, -1.45, 70, 120], [.3, -2.0, 60, 90]]) {
+    const x0 = u0 * TW, y = worldYToCanvasY(yw) - hh / 2;
+    a.fillStyle = 'rgba(0,0,0,.20)'; a.fillRect(x0 - 2, y - 2, w + 4, hh + 4);        // 外阴影
+    a.fillStyle = 'rgba(158,166,174,1)'; a.fillRect(x0, y, w, hh);                     // 盖板面
+    const lg = a.createLinearGradient(x0, y, x0 + w, y + hh);
+    lg.addColorStop(0, 'rgba(255,255,255,.16)'); lg.addColorStop(1, 'rgba(0,0,0,.14)');
+    a.fillStyle = lg; a.fillRect(x0, y, w, hh);
+    a.strokeStyle = 'rgba(34,40,48,.85)'; a.lineWidth = 2; a.strokeRect(x0, y, w, hh);
+    h.fillStyle = 'rgb(112,112,112)'; h.fillRect(x0, y, w, hh);
+    h.strokeStyle = 'rgb(76,76,76)'; h.lineWidth = 2; h.strokeRect(x0, y, w, hh);
+    g.fillStyle = 'rgb(126,126,126)'; g.fillRect(x0 / 2, y / 2, w / 2, hh / 2);
+    for (const [cx, cy] of [[x0 + 7, y + 7], [x0 + w - 7, y + 7], [x0 + 7, y + hh - 7], [x0 + w - 7, y + hh - 7],
+    [x0 + w / 2, y + 7], [x0 + w / 2, y + hh - 7], [x0 + 7, y + hh / 2], [x0 + w - 7, y + hh / 2]]) {
+      a.fillStyle = 'rgba(40,46,54,.9)'; a.beginPath(); a.arc(cx, cy, 2.6, 0, 7); a.fill();
+      a.fillStyle = 'rgba(220,226,232,.7)'; a.beginPath(); a.arc(cx - .7, cy - .8, 1.1, 0, 7); a.fill();
+      mm.fillStyle = 'rgb(220,220,220)'; a.beginPath(); mm.arc(cx, cy, 1.9, 0, 7); mm.fill();
+      const rg = h.createRadialGradient(cx, cy, 0, cx, cy, 3);
+      rg.addColorStop(0, 'rgb(206,206,206)'); rg.addColorStop(1, 'rgb(112,112,112)');
+      h.fillStyle = rg; h.beginPath(); h.arc(cx, cy, 3, 0, 7); h.fill();
+    }
+    // 拆装造成的漆面磨损（口盖周围）
+    for (let i = 0; i < 26; i++) {
+      const ex = Math.random() < .5 ? x0 - 6 - Math.random() * 8 : x0 + w + 6 + Math.random() * 8;
+      const ey = y + Math.random() * hh;
+      a.fillStyle = `rgba(206,212,219,${.25 + Math.random() * .4})`;
+      chipPoly(a, ex, ey, 1 + Math.random() * 2.4, 5);
+      mm.fillStyle = 'rgb(220,220,220)'; chipPoly(mm, ex, ey, 1 + Math.random() * 2, 5);
+    }
+  }
+  /* ---- 喷涂标识 ---- */
   function stamp(text, uFrac, yWorld, px, color, font = 'bold') {
     const x = uFrac * TW, y = worldYToCanvasY(yWorld);
     a.save(); a.translate(x, y); a.rotate(-Math.PI / 2);
@@ -79,13 +178,14 @@ function makeBodyMaps() {
     a.textAlign = 'center'; a.textBaseline = 'middle';
     a.fillText(text, 0, 0); a.restore();
   }
-  stamp('MLAB-02', .30, -.6, 34, 'rgba(40,52,66,.9)');
-  stamp('POP-UP TEXTBOOK · INTERACTIVE LAB', .30, -1.15, 15, 'rgba(60,72,86,.75)');
-  stamp('LIFT HERE', .62, .05, 20, 'rgba(30,36,44,.8)');
+  stamp('MLAB-02', .30, -.6, 34, 'rgba(28,38,50,.9)');
+  stamp('POP-UP TEXTBOOK · INTERACTIVE LAB', .30, -1.15, 15, 'rgba(44,54,66,.75)');
+  stamp('LIFT HERE', .62, .05, 20, 'rgba(24,30,38,.82)');
+  stamp('↑ FWD', .30, .95, 15, 'rgba(28,38,50,.8)');
   // 吊装三角
   for (const u of [.60, .64]) {
     a.save(); a.translate(u * TW, worldYToCanvasY(.28)); a.rotate(-Math.PI / 2);
-    a.fillStyle = 'rgba(20,26,34,.85)';
+    a.fillStyle = 'rgba(18,24,32,.88)';
     a.beginPath(); a.moveTo(0, -9); a.lineTo(8, 6); a.lineTo(-8, 6); a.closePath(); a.fill();
     a.restore();
   }
@@ -93,77 +193,118 @@ function makeBodyMaps() {
   for (const u of [.18, .68]) {
     const x = u * TW, y = worldYToCanvasY(-1.95);
     a.save(); a.translate(x, y); a.rotate(-Math.PI / 2);
-    a.strokeStyle = 'rgba(178,32,32,.9)'; a.lineWidth = 3;
+    a.strokeStyle = 'rgba(168,30,30,.9)'; a.lineWidth = 3;
     a.strokeRect(-44, -13, 88, 26);
-    a.fillStyle = 'rgba(178,32,32,.9)';
+    a.fillStyle = 'rgba(168,30,30,.9)';
     a.font = 'bold 17px Arial'; a.textAlign = 'center'; a.textBaseline = 'middle';
     a.fillText('NO STEP', 0, 1);
     a.restore();
   }
   // 战斗部警示
-  stamp('HIGH EXPLOSIVE', .5, 1.5, 13, 'rgba(170,36,36,.85)');
-  stamp('EXERCISE', .82, 1.68, 13, 'rgba(48,88,60,.85)');
+  stamp('HIGH EXPLOSIVE', .5, 1.5, 13, 'rgba(160,34,34,.85)');
+  stamp('EXERCISE', .82, 1.68, 13, 'rgba(44,80,56,.85)');
   // 中性机徽（圆环+三角标）
   {
     const x = .5 * TW, y = worldYToCanvasY(1.62);
     a.save(); a.translate(x, y); a.rotate(-Math.PI / 2); a.scale(2, 1);
-    a.strokeStyle = 'rgba(38,50,64,.9)'; a.lineWidth = 4;
+    a.strokeStyle = 'rgba(30,40,52,.9)'; a.lineWidth = 4;
     a.beginPath(); a.arc(0, 0, 22, 0, 7); a.stroke();
-    a.fillStyle = 'rgba(38,50,64,.9)';
+    a.fillStyle = 'rgba(30,40,52,.9)';
     a.beginPath(); a.moveTo(0, -13); a.lineTo(12, 9); a.lineTo(-12, 9); a.closePath(); a.fill();
     a.restore();
   }
-  // 静压孔
-  a.fillStyle = 'rgba(30,34,40,.9)';
+  // 静压孔 + 天线窗
+  a.fillStyle = 'rgba(24,28,34,.92)';
   a.beginPath(); a.arc(.42 * TW, worldYToCanvasY(1.02), 3.5, 0, 7); a.fill();
   a.beginPath(); a.arc(.44 * TW, worldYToCanvasY(1.02), 3.5, 0, 7); a.fill();
+  mm.fillStyle = 'rgb(180,180,180)';
+  a.beginPath(); a.arc(.42 * TW, worldYToCanvasY(1.02), 3.5, 0, 7);
+  mm.beginPath(); mm.arc(.42 * TW, worldYToCanvasY(1.02), 3, 0, 7); mm.fill();
 
-  /* ---- roughness ---- */
-  const rw = 512, rh = 1024;
-  const rgh = document.createElement('canvas'); rgh.width = rw; rgh.height = rh;
-  const g = rgh.getContext('2d');
-  g.fillStyle = 'rgb(112,112,112)'; g.fillRect(0, 0, rw, rh);       // 基础 .44
-  for (let i = 0; i < 900; i++) {                                    // 磨光磨损斑
-    g.fillStyle = `rgba(${64 + Math.random() * 40 | 0},0,0,${.1 + Math.random() * .15})`;
-    g.fillStyle = `rgba(70,70,70,${.1 + Math.random() * .18})`;
-    g.beginPath(); g.arc(Math.random() * rw, Math.random() * rh, 1 + Math.random() * 7, 0, 7); g.fill();
-  }
-  for (const yw of SEAMS) {                                          // 缝隙更粗糙
-    const y = worldYToCanvasY(yw) / 2;
-    g.fillStyle = 'rgb(196,196,196)'; g.fillRect(0, y - 2, rw, 4);
-  }
-
-  /* ---- height → normal ---- */
-  const hcv = document.createElement('canvas'); hcv.width = TW; hcv.height = TH;
-  const h = hcv.getContext('2d');
-  h.fillStyle = 'rgb(128,128,128)'; h.fillRect(0, 0, TW, TH);
-  for (const yw of SEAMS) {                                          // 缝=凹槽
-    const y = worldYToCanvasY(yw);
-    h.fillStyle = 'rgb(70,70,70)'; h.fillRect(0, y - 3, TW, 6);
-    h.fillStyle = 'rgb(150,150,150)'; h.fillRect(0, y - 5, TW, 2); h.fillRect(0, y + 3, TW, 2);
-  }
-  for (const yw of SEAMS) {                                          // 铆钉=凸点
-    const y = worldYToCanvasY(yw);
-    for (const dy of [-9, 9]) for (let x = 6; x < TW; x += 14) {
-      if ((x / 14 | 0) % 7 === 3) continue;
-      const rg = h.createRadialGradient(x, y + dy, 0, x, y + dy, 3);
-      rg.addColorStop(0, 'rgb(215,215,215)'); rg.addColorStop(1, 'rgb(128,128,128)');
-      h.fillStyle = rg; h.beginPath(); h.arc(x, y + dy, 3, 0, 7); h.fill();
+  /* ---------- 数据铭牌 + 条码 ---------- */
+  {
+    const u = .30, y = worldYToCanvasY(-.05);
+    a.save(); a.translate(u * TW, y); a.rotate(-Math.PI / 2);
+    a.fillStyle = 'rgba(226,229,232,.92)'; a.fillRect(-58, -46, 116, 92);
+    a.strokeStyle = 'rgba(30,36,44,.9)'; a.lineWidth = 2; a.strokeRect(-58, -46, 116, 92);
+    a.fillStyle = 'rgba(28,34,42,.92)';
+    a.font = 'bold 15px Arial'; a.textAlign = 'center'; a.textBaseline = 'middle';
+    a.fillText('AAM / TRAINER', 0, -32);
+    a.font = '11px Arial';
+    a.fillText('S/N  ML-0207-EXP', 0, -14);
+    a.fillText('LOT  2026-08', 0, -1);
+    a.fillText('MFD  DAP-PAP LAB', 0, 12);
+    for (let i = 0, x = -50; x < 50; x += 3 + Math.random() * 3, i++) {
+      a.fillStyle = i % 3 === 0 ? 'rgba(20,24,30,.95)' : 'rgba(20,24,30,.6)';
+      a.fillRect(x, 22, 1 + Math.random() * 2, 18);
     }
+    a.restore();
+    h.save(); h.translate(u * TW, y); h.rotate(-Math.PI / 2);
+    h.fillStyle = 'rgb(146,146,146)'; h.fillRect(-58, -46, 116, 92);
+    h.restore();
+    g.save(); g.translate(u * TW / 2, y / 2); g.rotate(-Math.PI / 2);
+    g.fillStyle = 'rgb(74,74,74)'; g.fillRect(-29, -23, 58, 46);
+    g.restore();
   }
-  for (let i = 0; i < 500; i++) {                                  // 蒙皮凹坑
-    h.fillStyle = 'rgba(110,110,110,.2)';
-    h.beginPath(); h.arc(Math.random() * TW, Math.random() * TH, 1 + Math.random() * 4, 0, 7); h.fill();
-  }
-  const nrm = heightToNormal(hcv, 2.2);
 
-  const mkTex = cv => {
+  /* ---------- 尾部燃气烟熏 + 流挂 ---------- */
+  {
+    const lg = a.createLinearGradient(0, TH * .70, 0, TH);
+    lg.addColorStop(0, 'rgba(28,25,22,0)');
+    lg.addColorStop(1, 'rgba(20,18,16,.52)');
+    a.fillStyle = lg; a.fillRect(0, TH * .70, TW, TH * .30);
+    for (let i = 0; i < 200; i++) {
+      const x = Math.random() * TW, y = TH * (.72 + Math.random() * .28);
+      a.fillStyle = `rgba(18,16,14,${.04 + Math.random() * .18})`;
+      a.fillRect(x, y, 1 + Math.random() * 3.5, 18 + Math.random() * 100);
+    }
+    g.fillStyle = 'rgba(208,208,208,.45)'; g.fillRect(0, rh * .70, rw, rh * .30);
+    const lg2 = g.createLinearGradient(0, rh * .70, 0, rh);
+    lg2.addColorStop(0, 'rgba(210,210,210,0)'); lg2.addColorStop(1, 'rgba(210,210,210,.6)');
+    g.fillStyle = lg2; g.fillRect(0, rh * .70, rw, rh * .30);
+  }
+
+  /* ---------- roughness 细节：磨光斑 / 污渍 ---------- */
+  for (let i = 0; i < 1100; i++) {
+    g.fillStyle = Math.random() < .5
+      ? `rgba(66,66,66,${.1 + Math.random() * .2})`
+      : `rgba(168,168,168,${.06 + Math.random() * .14})`;
+    g.beginPath(); g.arc(Math.random() * rw, Math.random() * rh, 1 + Math.random() * 8, 0, 7); g.fill();
+  }
+  for (let i = 0; i < 60; i++) {                                   // 油渍/手印
+    const x = Math.random() * rw, y = Math.random() * rh, r = 6 + Math.random() * 26;
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, 'rgba(48,48,48,.35)'); rg.addColorStop(1, 'rgba(48,48,48,0)');
+    g.fillStyle = rg; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+
+  /* ---------- height 细节：蒙皮凹坑 / 波纹 ---------- */
+  for (let i = 0; i < 700; i++) {
+    h.fillStyle = Math.random() < .5 ? 'rgba(104,104,104,.22)' : 'rgba(152,152,152,.18)';
+    h.beginPath(); h.arc(Math.random() * TW, Math.random() * TH, 1 + Math.random() * 4.5, 0, 7); h.fill();
+  }
+  for (let i = 0; i < 40; i++) {                                   // 轻微蒙皮波纹（环向）
+    const y = Math.random() * TH;
+    h.strokeStyle = `rgba(${Math.random() < .5 ? 118 : 140},${Math.random() < .5 ? 118 : 140},${Math.random() < .5 ? 118 : 140},.25)`;
+    h.lineWidth = 2 + Math.random() * 4;
+    h.beginPath(); h.moveTo(0, y);
+    h.bezierCurveTo(TW * .3, y + (Math.random() - .5) * 10, TW * .7, y + (Math.random() - .5) * 10, TW, y);
+    h.stroke();
+  }
+  const nrm = heightToNormal(hcv, 2.6);
+
+  const mkTex = (cv, srgb = false) => {
     const t = new THREE.CanvasTexture(cv);
-    t.wrapS = THREE.RepeatWrapping; t.anisotropy = 8;
-    t.colorSpace = (cv === alb) ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 8;
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     return t;
   };
-  return { map: mkTex(alb), roughnessMap: mkTex(rgh), normalMap: mkTex(nrm) };
+  return {
+    map: mkTex(alb, true),
+    roughnessMap: mkTex(rgh),
+    metalnessMap: mkTex(mcv),
+    normalMap: mkTex(nrm),
+  };
 }
 
 /* 高度图 → 切线空间法线图 */
@@ -192,24 +333,27 @@ function heightToNormal(hCanvas, strength = 2) {
    材质库
    ============================================================ */
 function makeMats(maps) {
-  const M = {};
-  // 主蒙皮：冷灰漆面 + 清漆 + 全套贴图
+  const M: any = {};
+  // 主蒙皮：冷灰军械漆 + 清漆；metalness/roughness 由贴图驱动（剥落处露裸金属）
   M.paint = new THREE.MeshPhysicalMaterial({
     name: 'paint', map: maps.map, roughnessMap: maps.roughnessMap, normalMap: maps.normalMap,
-    normalScale: new THREE.Vector2(.65, .65),
-    metalness: .22, roughness: 1, clearcoat: .55, clearcoatRoughness: .38,
-    envMapIntensity: 1.25, side: THREE.DoubleSide,
+    metalnessMap: maps.metalnessMap,
+    normalScale: new THREE.Vector2(1.0, 1.0),
+    metalness: 1, roughness: 1, clearcoat: .32, clearcoatRoughness: .26,
+    envMapIntensity: 1.05, side: THREE.DoubleSide,
   });
   // 天线罩：微透陶瓷漆
   M.radome = new THREE.MeshPhysicalMaterial({
     name: 'radome', map: maps.map, roughnessMap: maps.roughnessMap, normalMap: maps.normalMap,
-    metalness: .12, roughness: .9, clearcoat: .8, clearcoatRoughness: .2,
-    transparent: true, opacity: .82, envMapIntensity: 1.4, side: THREE.DoubleSide,
+    metalnessMap: maps.metalnessMap,
+    normalScale: new THREE.Vector2(.8, .8),
+    metalness: .35, roughness: .78, clearcoat: .7, clearcoatRoughness: .18,
+    transparent: true, opacity: .82, envMapIntensity: 1.2, side: THREE.DoubleSide,
   });
-  // 弹翼漆面
+  // 弹翼/舵面漆面（薄锐缘、低清漆，避免“厚塑料片”）
   M.fin = new THREE.MeshPhysicalMaterial({
-    name: 'fin', color: 0x99a3ad, metalness: .3, roughness: .34,
-    clearcoat: .6, clearcoatRoughness: .3, envMapIntensity: 1.3, side: THREE.DoubleSide,
+    name: 'fin', color: 0x767e86, metalness: .5, roughness: .4,
+    clearcoat: .28, clearcoatRoughness: .34, envMapIntensity: 1.1, side: THREE.DoubleSide,
   });
   M.steel = new THREE.MeshStandardMaterial({ name: 'steel', color: 0xaebccb, metalness: .85, roughness: .3, side: THREE.DoubleSide });
   M.steelDark = new THREE.MeshStandardMaterial({ name: 'steelDark', color: 0x232a33, metalness: .7, roughness: .45, side: THREE.DoubleSide });
@@ -277,6 +421,55 @@ function starGrainShape(rValley, rTip, n = 8) {
 function cableTube(points, r, mat, seg = 32) {
   const curve = new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(...p)));
   return new THREE.Mesh(new THREE.TubeGeometry(curve, seg, r, 8), mat);
+}
+
+/* 对称翼型厚度分布（NACA 4 位系列，尖锐后缘） */
+function nacaYt(xc, tc) {
+  return 5 * tc * (0.2969 * Math.sqrt(xc) - 0.1260 * xc - 0.3516 * xc * xc
+    + 0.2843 * xc * xc * xc - 0.1015 * xc * xc * xc * xc);
+}
+/* 真实翼型舵面：沿展向放样，弦长/厚度线性收缩、前缘后掠
+   局部坐标：X=展向（0 为根），Y=弦向（+ 为前缘），Z=厚度 */
+function airfoilFinGeometry(opt: any = {}) {
+  const {
+    b = .50, cr = .64, ct = .32, leRoot = .34, leTip = -.04,
+    tRoot = .045, tTip = .030, xRoot = -.02, nSpan = 16, nChord = 26,
+  } = opt;
+  const rows = [];
+  for (let i = 0; i <= nSpan; i++) {
+    const s = i / nSpan;
+    const X = xRoot + s * (b - xRoot);
+    const c = cr + (ct - cr) * s;
+    const le = leRoot + (leTip - leRoot) * s;
+    const tc = tRoot + (tTip - tRoot) * s;
+    const pts = [];
+    for (let k = 0; k <= nChord; k++) {                  // 下表面：前缘 → 后缘
+      const xc = k / nChord;
+      pts.push([le - xc * c, -nacaYt(xc, tc) * c]);
+    }
+    for (let k = nChord - 1; k >= 1; k--) {              // 上表面：后缘 → 前缘
+      const xc = k / nChord;
+      pts.push([le - xc * c, +nacaYt(xc, tc) * c]);
+    }
+    rows.push({ X, pts });
+  }
+  const ring = rows[0].pts.length;                        // 2 * nChord
+  const pos = [], uv = [], idx = [];
+  for (const row of rows) for (let j = 0; j < ring; j++) {
+    pos.push(row.X, row.pts[j][0], row.pts[j][1]);
+    uv.push((row.X - xRoot) / (b - xRoot), j / ring);
+  }
+  for (let i = 0; i < nSpan; i++) for (let j = 0; j < ring; j++) {
+    const a = i * ring + j, b2 = i * ring + (j + 1) % ring;
+    const c2 = (i + 1) * ring + j, d = (i + 1) * ring + (j + 1) % ring;
+    idx.push(a, c2, b2, b2, c2, d);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /* ============================================================
@@ -496,38 +689,32 @@ export function buildMissile() {
   const gFins = new THREE.Group(); gFins.name = 'fins';
   const finDirs = [];
   {
-    // 平面形状：后掠梯形（x=展向, y=弦向）
-    const shape = new THREE.Shape();
-    shape.moveTo(0, .30); shape.lineTo(.40, .10); shape.lineTo(.52, -.06);
-    shape.lineTo(.52, -.20); shape.lineTo(0, -.30); shape.closePath();
-    const finGeo = new THREE.ExtrudeGeometry(shape, {
-      depth: .012, bevelEnabled: true, bevelThickness: .011, bevelSize: .014, bevelSegments: 3,
-    });
-    finGeo.translate(0, 0, -.006);
+    // 放样翼型：局部 X=展向（0 为翼根）、Y=弦向（+ 为前缘）、Z=厚度
+    const finGeo = airfoilFinGeometry();
     for (let i = 0; i < 4; i++) {
       const holder = new THREE.Group();
       const ang = i * 90 * DEG + 45 * DEG;
       const fin = new THREE.Mesh(finGeo, mats.fin);
       holder.add(fin);
-      // 根部整流罩
-      const fair = new THREE.Mesh(new THREE.CylinderGeometry(.035, .05, .55, 12), mats.panel);
-      fair.rotation.x = Math.PI / 2; fair.position.set(-.01, 0, 0);
+      // 翼根整流鼓包（包裹舵轴与作动器）
+      const fair = new THREE.Mesh(new THREE.SphereGeometry(.05, 18, 14), mats.panel);
+      fair.scale.set(1.15, 1.7, .44); fair.position.set(.03, .02, 0);
       holder.add(fair);
-      // 翼尖滚转舵（robust 小轮）
+      // 翼尖滚转舵（rolleron 小轮）
       const roller = new THREE.Group();
-      const wheel = new THREE.Mesh(new THREE.TorusGeometry(.045, .014, 10, 28), mats.steelDark);
+      const wheel = new THREE.Mesh(new THREE.TorusGeometry(.042, .012, 10, 28), mats.steelDark);
       roller.add(wheel);
-      const hub = new THREE.Mesh(new THREE.CylinderGeometry(.018, .018, .03, 12), mats.copper);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(.015, .015, .026, 12), mats.copper);
       hub.rotation.x = Math.PI / 2; roller.add(hub);
-      roller.position.set(.46, -.02, 0);
+      roller.position.set(.43, -.27, 0);
       holder.add(roller);
-      // 舵轴
-      const axle = new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, .07, 10), mats.steel);
-      axle.rotation.x = Math.PI / 2; axle.position.set(.02, .02, 0);
+      // 舵轴（沿展向贯穿翼根）
+      const axle = new THREE.Mesh(new THREE.CylinderGeometry(.013, .013, .17, 12), mats.steel);
+      axle.rotation.z = Math.PI / 2; axle.position.set(.07, .02, 0);
       holder.add(axle);
       holder.position.set(Math.cos(ang) * R * .95, -2.28, Math.sin(ang) * R * .95);
-      holder.rotation.y = -ang + Math.PI / 2;
-      holder.userData.hingeAxis = new THREE.Vector3(0, 1, 0);
+      holder.rotation.y = -ang;                    // 局部 +X → 弹体外法向（展向）
+      holder.userData.hingeAxis = new THREE.Vector3(1, 0, 0);   // 绕展向偏转 = 舵偏
       holder.userData.baseQuat = holder.quaternion.clone();
       gFins.add(holder);
       finDirs.push({ ang, holder });
@@ -540,9 +727,9 @@ export function buildMissile() {
     const grp = conf.grp;
     grp.userData.partKey = key;
     grp.userData.basePos = grp.position.clone();
-    grp.userData.explodeDir = new THREE.Vector3(...conf.dir);
+    grp.userData.explodeDir = new THREE.Vector3(conf.dir[0], conf.dir[1], conf.dir[2]);
     const anchor = new THREE.Object3D();
-    anchor.position.set(...conf.anchor);
+    anchor.position.set(conf.anchor[0], conf.anchor[1], conf.anchor[2]);
     grp.add(anchor);
     P[key] = Object.assign({ key, anchor, basePos: grp.position.clone(), curOffset: new THREE.Vector3() }, conf.meta);
     root.add(grp);
@@ -623,11 +810,12 @@ export function buildMissile() {
     },
 
     finDirs,
+    /* 舵偏：四片舵面各自绕“展向轴”同向偏转 —— 十字尾控的滚转通道 */
     finAngle(v) {
       const dirs = (this && this.finDirs) || finDirs;
       dirs.forEach(({ holder }) => {
         holder.quaternion.copy(holder.userData.baseQuat);
-        holder.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), v);
+        holder.rotateX(v);
       });
     },
 
@@ -635,7 +823,7 @@ export function buildMissile() {
     shellMats: [mats.paint, mats.radome, mats.fin],
     allMats: Object.values(mats),
 
-    disposeAll() { root.traverse(o => { o.geometry && o.geometry.dispose(); }); },
+    disposeAll() { root.traverse(o => { const m = o as any; if (m.geometry) m.geometry.dispose(); }); },
   };
 
   api.setExplode(0);

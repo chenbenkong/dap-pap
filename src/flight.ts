@@ -16,6 +16,14 @@ function sos(h) { return Math.max(295, 340 - h * .0038); }   // 音速近似
    A. 追击演示（比例导引 Proportional Navigation）
    ============================================================ */
 export class StrikeSim {
+  // 字段声明（TS 不会从构造函数赋值反推属性）
+  missilePos: any; missileVel: any; shipPos: any; shipVel: any;
+  state = 'ready'; time = 0; minDist = Infinity;
+  N = 4.2; aMaxG = 17; vMax = 1020; vMin = 860;
+  onHit: any = null; onStop: any = null;
+  searchT = 0; gCmd = 0; machNow = 0; dist = 0; closing = 0;
+  _prevD: any; hitPoint: any;
+
   constructor() {
     this.missilePos = new THREE.Vector3();
     this.missileVel = new THREE.Vector3();
@@ -129,6 +137,8 @@ export function predictedIntercept(sim, outVec) {
    B. 任务全弹道（预积分，可拖动时间轴回放）
    ============================================================ */
 export class MissionSim {
+  dt = .02; samples: any[] = []; meta: any = {}; params: any;
+
   constructor() {
     this.dt = .02;
     this.samples = [];

@@ -3,3 +3,7 @@ dist/
 .DS_Store
 *.local
 .vite/
+_shots/
+.build.log
+vite.config.ts.timestamp-*.mjs
+.shots/

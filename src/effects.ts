@@ -6,33 +6,165 @@ import * as THREE from 'three';
 
 const _v = new THREE.Vector3();
 
+/* ============================================================
+   体积火焰材质（程序化湍流噪声 + 视线厚度近似）
+   在圆锥表面用 |dot(N,V)| 近似“视线穿过火焰的光学厚度”，
+   叠加多层滚动 FBM 噪声做湍流，得到白热核心 → 橙黄 → 暗红的径向分层。
+   ============================================================ */
+const FIRE_VERT = /* glsl */`
+varying vec3 vLocal;
+varying vec3 vNrmV;
+varying vec3 vPosV;
+void main(){
+  vLocal = position;
+  vNrmV  = normalize(normalMatrix * normal);
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vPosV  = mv.xyz;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const FIRE_FRAG = /* glsl */`
+precision highp float;
+varying vec3 vLocal;
+varying vec3 vNrmV;
+varying vec3 vPosV;
+uniform float uTime;
+uniform float uPower;
+uniform float uLen;
+uniform float uScroll;
+uniform float uDensity;
+uniform float uSharp;
+uniform vec3  uCore;
+uniform vec3  uMid;
+uniform vec3  uOuter;
+
+float hash21(vec2 p){
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float fbm(vec2 p){
+  float s = 0.0, amp = 0.5;
+  for (int i = 0; i < 4; i++){ s += amp * vnoise(p); p *= 2.03; amp *= 0.5; }
+  return s;
+}
+
+void main(){
+  float H = max(uLen, 0.0001);
+  // s: 0 = 喷口，1 = 焰尖（锥体顶点在远端）
+  float s = clamp((vLocal.y + H * 0.5) / H, 0.0, 1.0);
+
+  // 视线穿过火焰的“光学厚度”：正对相机处最厚
+  vec3 N = normalize(vNrmV);
+  vec3 V = normalize(-vPosV);
+  float thick = pow(clamp(abs(dot(N, V)), 0.0, 1.0), uSharp);
+
+  // 湍流：绕轴环向 + 沿轴向快速下卷
+  float ang = atan(vLocal.z, vLocal.x) * 1.9;
+  vec2  np  = vec2(ang, s * 4.5 - uTime * uScroll);
+  float n1  = fbm(np * 1.6);
+  float n2  = fbm(np * 3.3 + vec2(17.0, -uTime * uScroll * 0.55));
+  float turb = n1 * 0.62 + n2 * 0.38;
+
+  // 轴向剖面：喷口起亮，中后段衰减散开
+  float axial = smoothstep(0.0, 0.10, s) * (1.0 - smoothstep(0.72, 1.0, s));
+  axial = pow(axial, 0.8);
+
+  float a = thick * axial * (0.35 + 0.9 * turb) * uPower * uDensity;
+  a = clamp(a, 0.0, 1.0);
+  if (a < 0.0035) discard;
+
+  // 径向分层：核心白热 → 中段橙黄 → 外缘暗红
+  float heat = clamp(thick * 0.72 + turb * 0.38 - s * 0.30, 0.0, 1.0);
+  vec3 col = mix(uOuter, uMid, smoothstep(0.12, 0.55, heat));
+  col      = mix(col, uCore, smoothstep(0.58, 1.00, heat));
+  col     *= (0.55 + 0.85 * uPower);
+
+  gl_FragColor = vec4(col, a);
+}
+`;
+
+/** 创建一层体积火焰材质（线性 HDR 配色，交给 Bloom 出光晕） */
+function makeFireMaterial(opt: any = {}) {
+  const {
+    core = [5.2, 4.1, 2.6], mid = [2.6, 1.15, 0.26], outer = [1.05, 0.26, 0.05],
+    len = 1.55, scroll = 6.0, density = 1.0, sharp = 1.35,
+  } = opt;
+  const c3 = a => new THREE.Color().setRGB(a[0], a[1], a[2]);
+  return new THREE.ShaderMaterial({
+    name: 'volumetricFire',
+    vertexShader: FIRE_VERT,
+    fragmentShader: FIRE_FRAG,
+    uniforms: {
+      uTime: { value: 0 },
+      uPower: { value: 0 },
+      uLen: { value: len },
+      uScroll: { value: scroll },
+      uDensity: { value: density },
+      uSharp: { value: sharp },
+      uCore: { value: c3(core) },
+      uMid: { value: c3(mid) },
+      uOuter: { value: c3(outer) },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+}
+
 /* ================= 发动机羽流（挂在任意锚点上）================= */
 export class Plume {
+  // 字段声明（TS 不会从构造函数赋值反推属性）
+  anchor: any; group: any; fireOuter: any; flameOuter: any; flameCore: any;
+  fireLayers: any[]; diamonds: any[]; light: any;
+  sparkN = 0; sparkVel: any[]; sparks: any;
+  power = 0; time = 0; scale = 1;
+
   constructor(anchor) {
     this.anchor = anchor;
     this.group = new THREE.Group();
     anchor.add(this.group);
-    // 单位长度沿 -Y 的锥形焰
-    const flameMat = new THREE.MeshBasicMaterial({
-      color: 0xff9a3c, transparent: true, opacity: .85,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    });
-    this.flameOuter = new THREE.Mesh(new THREE.ConeGeometry(.16, 1.55, 24, 1, true), flameMat);
-    this.flameOuter.rotation.x = Math.PI;               // 指向 -Y
+    // 三层体积火焰：外焰（宽而暗）/ 内焰（主体）/ 核心（白热）
+    this.fireOuter = new THREE.Mesh(
+      new THREE.ConeGeometry(.20, 1.85, 40, 20, true),
+      makeFireMaterial({
+        core: [2.2, 0.95, 0.28], mid: [1.5, 0.45, 0.09], outer: [0.55, 0.10, 0.02],
+        len: 1.85, scroll: 4.2, density: .78, sharp: 1.7,
+      }));
+    this.fireOuter.rotation.x = Math.PI;              // 指向 -Y
+    this.fireOuter.position.y = -.92;
+
+    this.flameOuter = new THREE.Mesh(
+      new THREE.ConeGeometry(.155, 1.55, 40, 20, true),
+      makeFireMaterial({
+        core: [5.2, 3.6, 2.1], mid: [2.6, 1.05, 0.22], outer: [1.00, 0.22, 0.04],
+        len: 1.55, scroll: 6.4, density: 1.0, sharp: 1.35,
+      }));
+    this.flameOuter.rotation.x = Math.PI;
     this.flameOuter.position.y = -.78;
-    const coreMat = flameMat.clone(); coreMat.color = new THREE.Color(0xfff6e0);
-    this.flameCore = new THREE.Mesh(new THREE.ConeGeometry(.085, .95, 18, 1, true), coreMat);
+
+    this.flameCore = new THREE.Mesh(
+      new THREE.ConeGeometry(.075, .92, 28, 16, true),
+      makeFireMaterial({
+        core: [8.5, 7.4, 5.6], mid: [5.0, 3.2, 1.3], outer: [2.4, 1.0, 0.22],
+        len: .92, scroll: 9.5, density: 1.25, sharp: 1.05,
+      }));
     this.flameCore.rotation.x = Math.PI;
-    this.flameCore.position.y = -.48;
-    this.group.add(this.flameOuter, this.flameCore);
-    // 马赫环(亮斑串)
-    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: .7, blending: THREE.AdditiveBlending, depthWrite: false });
-    this.diamonds = [];
-    for (let i = 0; i < 4; i++) {
-      const d = new THREE.Mesh(new THREE.SphereGeometry(.05 - i * .006, 10, 10), ringMat);
-      d.position.y = -.34 - i * .27;
-      this.group.add(d); this.diamonds.push(d);
-    }
+    this.flameCore.position.y = -.46;
+
+    this.fireLayers = [this.fireOuter, this.flameOuter, this.flameCore];
+    this.group.add(this.fireOuter, this.flameOuter, this.flameCore);
     // 光
     this.light = new THREE.PointLight(0xffa64d, 0, 12, 1.8);
     this.light.position.y = -.5;
@@ -73,10 +205,19 @@ export class Plume {
     if (!this.group.visible) return;
     this.time += dt;
     const flick = .82 + .18 * Math.sin(this.time * 47) + .1 * Math.sin(this.time * 91 + 1.3);
-    const L = this.power * this.scale * (1.5 + .5 * flick) * 1.35;
+    // 火焰外形：长度/宽度随推力增长，叠加高频抖动
+    const grow = this.power * flick * 1.5;
     const W = (.16 + .05 * flick) * (.5 + this.power * .75);
-    this.flameOuter.scale.set(W / .16, this.power * flick * 1.5, W / .16);
-    this.flameCore.scale.setScalar(.72 + .28 * flick);
+    this.fireOuter.scale.set((W / .16) * 1.12, grow * 1.08, (W / .16) * 1.12);
+    this.flameOuter.scale.set(W / .16, grow, W / .16);
+    this.flameCore.scale.set((W / .16) * (.9 + .16 * flick), grow * .95, (W / .16) * (.9 + .16 * flick));
+    // 体积火焰 shader：时间 + 推力档
+    const pw = THREE.MathUtils.clamp(this.power * flick * 1.12, 0, 1.3);
+    for (const m of this.fireLayers) {
+      const u = m.material.uniforms;
+      u.uTime.value = this.time;
+      u.uPower.value = pw;
+    }
     this.light.intensity = 240 * Math.pow(this.scale, 2) * this.power;   // 米制世界按面积补偿
     this.diamonds.forEach((d, i) => {
       d.material.opacity = this.power > .25 ? .78 : 0;
@@ -107,6 +248,9 @@ export class Plume {
 
 /* ================= 弹道拖尾（速度→颜色渐变）================= */
 export class Trail {
+  max = 0; n = 0; positions: Float32Array; colors: Float32Array;
+  line: any; _minV = 260; _maxV = 1250;
+
   constructor(sceneWorld, maxPts = 5200) {
     this.max = maxPts; this.n = 0;
     this.positions = new Float32Array(maxPts * 3);
@@ -150,6 +294,9 @@ export class Trail {
 
 /* ================= 命中爆炸 ================= */
 export class Boom {
+  scene: any; parts: any[]; tex: any; N = 0; points: any; ring: any; flash: any;
+  active = false; t = 0; center: any; vel: any[]; size = 1;
+
   constructor(parentScene) {
     this.scene = parentScene;
     this.parts = [];
