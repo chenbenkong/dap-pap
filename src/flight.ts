@@ -1,0 +1,222 @@
+// ============================================================
+// 立体课本 · 导弹实验台 — 飞行仿真
+// A. 比例导引追击演示(第3章)
+// B. 全程任务弹道：助推-惯性中段-末段导引-命中(第4章)
+// 单位制：米、秒；模型比例在渲染端另行缩放
+// ============================================================
+import * as THREE from 'three';
+
+const G0 = 9.80665;
+
+/* ---------- 简易大气 ---------- */
+function rho(h) { return 1.225 * Math.exp(-Math.max(h, 0) / 8500); }
+function sos(h) { return Math.max(295, 340 - h * .0038); }   // 音速近似
+
+/* ============================================================
+   A. 追击演示（比例导引 Proportional Navigation）
+   ============================================================ */
+export class StrikeSim {
+  constructor() {
+    this.missilePos = new THREE.Vector3();
+    this.missileVel = new THREE.Vector3();
+    this.shipPos = new THREE.Vector3();
+    this.shipVel = new THREE.Vector3();
+    this.state = 'ready';      // ready|search|homing|hit|timeout
+    this.time = 0;
+    this.minDist = Infinity;
+    this.N = 4.2;              // PN 导航比
+    this.aMaxG = 17;
+    this.vMax = 1020; this.vMin = 860;
+    this.onHit = null; this.onStop = null;
+  }
+  reset(rng = Math.random) {
+    const azDeg = (rng() * 44 - 22);                    // 舰船航向 ±22° 偏离 X 轴
+    const spd = 13 + rng() * 6;
+    this.shipPos.set(1500 + rng() * 800, 0, -650 + rng() * 300);
+    const sAz = azDeg * Math.PI / 180;
+    this.shipVel.set(Math.cos(sAz) * spd, 0, -Math.sin(sAz) * spd);
+    // 导弹从高空侧翼进入，距离约 6 km
+    const side = rng() < .5 ? 1 : -1;
+    this.missilePos.set(this.shipPos.x - 4300, 3400 + rng() * 700, this.shipPos.z + side * (1600 + rng() * 600));
+    const dir0 = new THREE.Vector3().subVectors(this.shipPos, this.missilePos).normalize();
+    this.missileVel.copy(dir0).multiplyScalar(930);
+    this.state = 'search'; this.searchT = 0;
+    this.time = 0; this.minDist = Infinity;
+    this.gCmd = 0; this.machNow = 0;
+  }
+  losRate(out) {
+    // 视线角速度矢量 ω = (r × ṙ)/|r|²
+    const r = _t1.subVectors(this.shipPos, this.missilePos);
+    const rd = _t2.subVectors(this.shipVel, this.missileVel);
+    out.crossVectors(r, rd).divideScalar(r.lengthSq());
+    return r;   // 返回相对位置以便复用
+  }
+  step(dt) {
+    if (this.state !== 'search' && this.state !== 'homing') return;
+    this.time += dt;
+    const vLen0 = this.missileVel.length();
+    // 简化空气制动
+    const alt = this.missilePos.y;
+    const drag = -(vLen0 ** 2) * 0.0000068 * rho(alt);
+    let vLen = vLen0 + (this.state === 'homing' ? 55 : 85) * dt;   // 发动机仍在加速
+    vLen += drag / vLen0 * dt * vLen0;
+    vLen = Math.min(vLen, this.vMax);
+
+    if (this.state === 'search') {
+      this.searchT += dt;
+      if (this.searchT > .5) this.state = 'homing';
+      this.gCmd = 0;
+    }
+    let aLateral = _t3.set(0, 0, 0);
+    if (this.state === 'homing') {
+      const r = this.losRate(_omega);
+      const closing = -_t2.subVectors(this.shipPos, this.missilePos).normalize().dot(
+        _t4.subVectors(this.shipVel, this.missileVel));
+      // a = N·Vc·ω （限制在水平面内+垂直微调）
+      aLateral.crossVectors(_omega, this.missileVel.clone().normalize()).multiplyScalar(this.N * closing);
+      const aMag = aLateral.length();
+      const aMax = this.aMaxG * G0;
+      if (aMag > aMax) { aLateral.multiplyScalar(aMax / aMag); this.gCmd = this.aMaxG; }
+      else this.gCmd = aMag / G0;
+    } else {
+      // 搜索段朝预测前置点缓慢修正
+      const lead = _t5.copy(this.shipPos).addScaledVector(this.shipVel, 2.4);
+      const dirLead = _t6.subVectors(lead, this.missilePos).normalize();
+      aLateral.subVectors(dirLead.multiplyScalar(vLen0), this.missileVel).multiplyScalar(.55);
+      aLateral.y *= .3;
+    }
+    // 积分：速度向新方向弯折并保持目标速率
+    const newVel = _t7.copy(this.missileVel).addScaledVector(aLateral, dt);
+    newVel.setLength(Math.max(this.vMin, Math.min(vLen, this.vMax)));
+    // 掉高补偿：末段允许自然下沉
+    this.missilePos.addScaledVector(newVel, dt);
+    this.missileVel.copy(newVel);
+    this.shipPos.addScaledVector(this.shipVel, dt);
+
+    const d = _t8.subVectors(this.shipPos, this.missilePos).length();
+    if (d < this.minDist) this.minDist = d;
+    this.machNow = vLen / sos(alt);
+    this.dist = d;
+    this.closing = closingOf(this);
+    // 命中判定: 进入杀伤半径, 或距离“先收缩后回升”(大步长穿透)即在该最近点起爆
+    const penetrated = this._prevD !== undefined &&
+      d > this._prevD + 40 && this._prevD < 420 && this.missilePos.y < this.shipPos.y + 90;
+    if ((d < 34 || penetrated) && this.missilePos.y < this.shipPos.y + 90) {
+      this.state = 'hit';
+      this.hitPoint = this.shipPos.clone().setY(this.shipPos.y + 12);
+      this.onHit && this.onHit(this);
+    }
+    this._prevD = d;
+    if (this.time > 26) {
+      this.state = 'timeout';
+      this.onStop && this.onStop(this);
+    }
+  }
+}
+function closingOf(s) { return -_t9.subVectors(s.shipPos, s.missilePos).normalize().dot(_ta.subVectors(s.shipVel, s.missileVel)); }
+
+/* 预测命中点(平面匀速直线近似)：解 |Δp + Δv·t| 最小 */
+export function predictedIntercept(sim, outVec) {
+  const rp = _tb.subVectors(sim.missilePos, sim.shipPos);
+  const rv = _tc.subVectors(sim.missileVel, sim.shipVel);
+  const b = 2 * rp.dot(rv), a = rv.lengthSq();
+  let t = -b / (2 * a);
+  t = THREE.MathUtils.clamp(t, 0, 14);
+  return outVec.copy(sim.shipPos).addScaledVector(sim.shipVel, t);
+}
+
+/* ============================================================
+   B. 任务全弹道（预积分，可拖动时间轴回放）
+   ============================================================ */
+export class MissionSim {
+  constructor() {
+    this.dt = .02;
+    this.samples = [];
+    this.meta = {};
+    this.params = {
+      m0: 1680, thrust: 248e3, burnT: 7.2, mdot: 37,
+      cd: .30, area: .21, pitch0: 72, pitchEnd: 26,
+      lockAt: 17.5, aimX: 27200, nMax: 12,
+    };
+  }
+  /* 积分一次完整弹道 */
+  launch() {
+    const P = this.params, dt = this.dt;
+    let t = 0, m = P.m0, burnLeft = P.burnT;
+    let pos = new THREE.Vector3(0, 4, 0), vel = new THREE.Vector3();
+    let phase = 0;                     // 0 助推 1 中段 2 末段 3 命中
+    const S = this.samples = [];
+    const push = (g, ph) => S.push({ t, px: pos.x, py: pos.y, pz: pos.z, v: vel.length(), mach: vel.length() / sos(pos.y), g, ph });
+    push(0, 0);
+    let gLoad = 0;
+    const MAXT = 120;
+    while (t < MAXT) {
+      const v = vel.length(), h = Math.max(pos.y, 0);
+      const F = new THREE.Vector3(0, -G0 * m, 0);   // 重力
+      // 气动阻力
+      if (v > 1) {
+        const D = .5 * rho(h) * v * v * P.cd * P.area;
+        F.addScaledVector(vel, -D / v);
+      }
+      // 推力沿弹轴(速度方向+程序角)
+      if (burnLeft > 0) {
+        const prog = 1 - Math.pow(burnLeft / P.burnT, .8);
+        const pitchDeg = THREE.MathUtils.lerp(P.pitch0, P.pitchEnd, Math.min(prog, 1));
+        const pitch = pitchDeg * Math.PI / 180;
+        const horiz = new THREE.Vector3(Math.cos(pitch), Math.sin(pitch), 0);
+        // 保持初始方位 +X；方向从“上仰”平滑由程序角控制
+        const dirThrust = v > 20 ? _td.copy(vel).normalize().lerp(horiz, .16).normalize() : horiz;
+        F.addScaledVector(dirThrust, P.thrust);
+        m -= P.mdot * dt;
+        burnLeft -= dt;
+        phase = 0;
+      } else if (phase === 0) { phase = 1; }
+
+      const acc = F.divideScalar(m);
+      // 锁定后转入比例导引扑向下落点目标
+      if (burnLeft <= 0 && t >= P.lockAt && phase === 1) phase = 2;
+      if (phase === 2) {
+        const aim = _te.set(P.aimX, 4, 0);
+        const rel = _tf.subVectors(aim, pos);
+        const distH = Math.hypot(rel.x, rel.z);
+        // 期望速度方向指向目标前方压低点
+        const want = _tg.copy(rel).normalize();
+        const cur = _th.copy(vel).normalize();
+        const corr = _ti.subVectors(want.multiplyScalar(vel.length()), vel);
+        const clamped = Math.min(P.nMax * G0, corr.length() * 2.2);
+        corr.normalize().multiplyScalar(clamped);
+        acc.add(corr);
+        gLoad = clamped / G0;
+        void distH;
+      } else {
+        gLoad = acc.clone().sub(new THREE.Vector3(0, -G0 * (burnLeft > 0 ? m * G0 : 0), 0)).length() / G0;
+        gLoad = Math.abs(gLoad);
+      }
+      vel.addScaledVector(acc, dt);
+      pos.addScaledVector(vel, dt);
+      t += dt;
+      if (pos.y <= 6 && vel.y < 0) { phase = 3; push(gLoad, 3); break; }
+      if (Math.floor(t / dt) % 1 === 0) push(gLoad, phase);
+    }
+    // 元信息
+    let apex = 0, maxV = 0, maxMach = 0;
+    for (const s of S) { apex = Math.max(apex, s.py); maxV = Math.max(maxV, s.v); maxMach = Math.max(maxMach, s.mach); }
+    this.meta = { duration: S[S.length - 1].t, range: S[S.length - 1].px / 1000, apex, maxV, maxMach };
+    return this.samples;
+  }
+  sampleAt(tt) {
+    const S = this.samples;
+    if (!S.length) return null;
+    const i = THREE.MathUtils.clamp(Math.round(tt / this.dt), 0, S.length - 1);
+    return S[i];
+  }
+}
+
+/* 共享临时向量 */
+const _t1 = new THREE.Vector3(), _t2 = new THREE.Vector3(), _t3 = new THREE.Vector3(),
+  _t4 = new THREE.Vector3(), _t5 = new THREE.Vector3(), _t6 = new THREE.Vector3(),
+  _t7 = new THREE.Vector3(), _t8 = new THREE.Vector3(), _t9 = new THREE.Vector3(),
+  _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _tc = new THREE.Vector3(),
+  _td = new THREE.Vector3(), _te = new THREE.Vector3(), _tf = new THREE.Vector3(),
+  _tg = new THREE.Vector3(), _th = new THREE.Vector3(), _ti = new THREE.Vector3(),
+  _omega = new THREE.Vector3();
