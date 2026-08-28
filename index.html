@@ -91,6 +91,55 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 .chapter-goal{margin-top:6px;color:var(--cyan);font-size:12.5px;letter-spacing:.03em;display:flex;gap:6px;align-items:center}
 .chapter-goal::before{content:"◈";font-size:10px}
 
+/* ---------- 工位切换 ---------- */
+.station-line{margin-top:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.station-switch{display:flex;gap:3px;padding:3px;border:1px solid var(--line);border-radius:7px;background:rgba(4,8,15,.5)}
+.station-btn{
+  appearance:none;border:0;cursor:pointer;background:transparent;color:var(--faint);
+  padding:6px 13px;border-radius:5px;font-family:var(--sans);line-height:1.15;
+  display:flex;flex-direction:column;align-items:flex-start;gap:1px;transition:all .18s;
+}
+.station-btn b{font-size:13.5px;font-weight:700;letter-spacing:.06em}
+.station-btn small{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;opacity:.8}
+.station-btn:hover{color:var(--ink);background:rgba(146,176,214,.07)}
+.station-btn.active{color:var(--bg0);background:var(--amber);box-shadow:0 3px 14px rgba(255,180,84,.3)}
+.show-btn{
+  appearance:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+  padding:8px 15px;border-radius:6px;font-family:var(--sans);font-size:12.5px;font-weight:700;letter-spacing:.06em;
+  color:var(--bg0);background:linear-gradient(135deg,#ffc978,#ff9a3c);border:0;
+  box-shadow:0 4px 16px rgba(255,154,60,.32);transition:transform .16s,box-shadow .2s,filter .2s;
+}
+.show-btn:hover{transform:translateY(-1px);box-shadow:0 6px 22px rgba(255,154,60,.45)}
+.show-btn .tri{font-size:10px}
+.show-btn.playing{background:linear-gradient(135deg,#7f8ea3,#5b6b80);box-shadow:none}
+.show-btn.playing .tri{animation:blink 1s steps(2,end) infinite}
+@keyframes blink{50%{opacity:.15}}
+
+/* ---------- 飞行 HUD ---------- */
+.flight-hud{
+  position:fixed;left:18px;top:200px;z-index:9;width:212px;
+  padding:11px 13px;border:1px solid var(--line-strong);border-radius:7px;
+  background:linear-gradient(160deg,rgba(9,15,27,.9),rgba(6,11,20,.78));
+  backdrop-filter:blur(8px);box-shadow:0 10px 34px rgba(0,0,0,.45);
+  opacity:0;transform:translateX(-14px);pointer-events:none;transition:opacity .3s,transform .3s;
+}
+.flight-hud.show{opacity:1;transform:none}
+.flight-hud::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:2px;border-radius:7px 0 0 7px;
+  background:linear-gradient(180deg,var(--amber),transparent);
+}
+.hud-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:9px}
+.hud-phase{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--amber);
+  border:1px solid rgba(255,180,84,.4);border-radius:3px;padding:2px 6px;
+}
+.hud-t{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ink)}
+.hud-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 9px}
+.hud-grid>div{border-bottom:1px solid var(--line);padding-bottom:4px}
+.hud-grid small{display:block;font-size:8.5px;letter-spacing:.12em;color:var(--faint);margin-bottom:1px}
+.hud-grid b{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--cyan)}
+.hud-grid i{font-family:var(--mono);font-size:9px;font-style:normal;color:var(--faint);margin-left:3px}
+
 /* ---------- 右侧数据面板 ---------- */
 .data-panel{
   position:fixed;top:88px;right:18px;width:302px;max-height:calc(100vh - 240px);
@@ -309,19 +358,36 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
     <div class="plaque-mini">GUIDED MISSILE&nbsp;&nbsp;No.&nbsp;02</div>
     <h1>立体课本 · 导弹实验台</h1>
     <p class="subtitle">拆开一枚导弹，再跟它飞完全程：动力、制导与弹道，一次看懂。</p>
-    <div class="chapter-line">
-      <span class="chapter-tag" id="chTag">第 1 章</span>
-      <span class="chapter-title" id="chTitle">认识一枚导弹</span>
+    <!-- 工位切换（不是章节：同一个实验台上的三个位置） -->
+    <div class="station-line">
+      <div class="station-switch" id="stationSwitch">
+        <button class="station-btn active" data-station="assembly"><b>装配台</b><small>ASSEMBLY</small></button>
+        <button class="station-btn" data-station="bench"><b>试车台</b><small>TEST BENCH</small></button>
+        <button class="station-btn" data-station="range"><b>靶场</b><small>RANGE</small></button>
+      </div>
+      <button class="show-btn" id="fullShowBtn" title="自动播放：合拢 → 点火 → 发射 → 全弹道 → 命中">
+        <span class="tri">▶</span><span>全流程演示</span>
+      </button>
     </div>
-    <p class="chapter-goal" id="chGoal">点击部件或左侧卡片，看清每个舱段的作用。</p>
-  </div>
-
-  <!-- 章节导航 -->
-  <div class="chapter-nav">
-    <button class="nav-btn" id="navPrev" title="上一章 (←)" aria-label="上一章"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M14.5 5 L7.5 12 L14.5 19"/></svg><span>上一章</span></button>
-    <button class="nav-btn" id="navNext" title="下一章 (→)" aria-label="下一章"><span>下一章</span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9.5 5 L16.5 12 L9.5 19"/></svg></button>
+    <p class="chapter-goal" id="stGoal">点击部件或左侧卡片，看清每个舱段的作用。</p>
   </div>
 </header>
+
+<!-- 飞行 HUD（仅靶场工位且任务开始后显示） -->
+<div class="flight-hud" id="flightHud">
+  <div class="hud-top">
+    <span class="hud-phase" id="hudPhase">待发射</span>
+    <b class="hud-t" id="hudT">T+00.0s</b>
+  </div>
+  <div class="hud-grid">
+    <div><small>高度 ALT</small><b id="hudAlt">0.0</b><i>km</i></div>
+    <div><small>速度 V</small><b id="hudV">0</b><i>m/s</i></div>
+    <div><small>马赫 Ma</small><b id="hudMach">0.00</b><i></i></div>
+    <div><small>过载 G</small><b id="hudG">0.0</b><i></i></div>
+    <div><small>已飞程</small><b id="hudRng">0.0</b><i>km</i></div>
+    <div><small>弹目距离</small><b id="hudSep">—</b><i>m</i></div>
+  </div>
+</div>
 
 <!-- 右侧数据面板 -->
 <aside class="data-panel" id="dataPanel">
@@ -344,9 +410,9 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 <div class="control-desk" id="controlDesk">
   <div class="desk-wrap">
 
-    <!-- 第1/2章通用:模型 -->
+    <!-- 装配台 -->
     <section class="desk-group" id="grpModel">
-      <h3>模型 MODEL</h3>
+      <h3>结构解剖 STRUCTURE</h3>
       <label class="slider-row"><span>爆炸 / 组装</span><input type="range" id="explodeSlider" min="0" max="100" step="1" value="0"><em id="explodeVal">0%</em></label>
       <div class="row">
         <button class="btn-toggle" id="cutawayBtn">剖视内构</button>
@@ -375,23 +441,9 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
       </div>
     </section>
 
-    <!-- 第3章:拦截演示 -->
-    <section class="desk-group" id="grpStrike" style="display:none">
-      <h3>追击演示 INTERCEPT</h3>
-      <div class="row">
-        <button class="btn-primary" id="strikeBtn">开始追击</button>
-        <span class="state-chip" id="strikeChip">目标搜索中…</span>
-      </div>
-      <div class="row" style="margin-top:6px">
-        <button class="btn-toggle on" id="losBtn">视线连线</button>
-        <button class="btn-toggle" id="predictBtn">预测命中点</button>
-        <button class="btn-ghost" id="strikeReset">重置对手</button>
-      </div>
-    </section>
-
-    <!-- 第4章:全程弹道 -->
-    <section class="desk-group" id="grpMission" style="display:none">
-      <h3>任务时间轴 MISSION TIMELINE</h3>
+    <!-- 靶场：一条连续的任务时间轴（发射 → 助推 → 中段 → 末段导引 → 命中） -->
+    <section class="desk-group" id="grpRange" style="display:none">
+      <h3>靶场任务 MISSION</h3>
       <div class="row">
         <button class="btn-primary" id="launchBtn">发射</button>
         <button class="btn-ghost" id="pauseBtn" disabled>暂停</button>
@@ -407,6 +459,16 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
         <button class="btn-toggle on" data-cam="follow" id="camFollow">跟弹视角</button>
         <button class="btn-toggle" data-cam="globalView" id="camGlobalView">全局弹道</button>
         <button class="btn-ghost" id="missionReset">重置任务</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn-toggle on" id="losBtn">视线连线</button>
+        <button class="btn-toggle" id="predictBtn">预测命中点</button>
+        <button class="btn-toggle" id="targetMoveBtn">目标机动</button>
+      </div>
+      <div class="readout-pair" style="margin-top:7px">
+        <div><small>弹目距离</small><b id="mSepVal">— m</b></div>
+        <div><small>接近率</small><b id="mCloseVal">— m/s</b></div>
+        <div><small>需用过载</small><b id="mGVal">— G</b></div>
       </div>
     </section>
 

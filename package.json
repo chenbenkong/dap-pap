@@ -9,7 +9,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "selftest": "node tools/selftest.mjs",
+    "verify": "npm run typecheck && npm run selftest && npm run build"
   },
   "dependencies": {
     "three": "0.160.0"

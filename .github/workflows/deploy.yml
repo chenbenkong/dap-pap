@@ -30,6 +30,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Physics self-test
+        run: npm run selftest
+
       - name: Build
         run: npm run build
 

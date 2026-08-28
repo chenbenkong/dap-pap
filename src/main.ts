@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { createScene } from './scene';
 import { buildMissile } from './parts';
 import { Plume, Trail, Boom, buildShip } from './effects';
-import { StrikeSim, MissionSim, predictedIntercept } from './flight';
+import { MissionSim, predictedIntercept } from './flight';
 
 /** 取单个元素（本教具大量直接访问 DOM 属性，统一放宽为 any） */
 const $ = (s: string): any => document.querySelector(s);
@@ -23,17 +23,19 @@ const DEG = Math.PI / 180;
 /*                       应 用 状 态                             */
 /* ============================================================ */
 const S: any = {
-  chapter: 1,
+  /* 工位：assembly 装配台 / bench 试车台 / range 靶场
+     不是"章节"——同一个实验台上的三个位置，一条连续的任务线贯穿其中 */
+  station: 'assembly',
   labelsOn: true, spinOn: false, cutawayOn: false,
   explore: .0,            // 爆炸度
   // 试车
   burning: false, clock: 0, BURN_T: 7.0, curProfile: 0, manualScrub: false,
   burnChart: [],
-  // 追击
-  strikeState: 'idle',
-  // 任务
+  // 靶场任务
   missionPlaying: false, mt: 0, spd: 1, missionEnded: false,
   missionChartsDirty: false,
+  targetMove: false,      // 目标舰是否做规避机动
+  showRunning: false,     // 全流程演示进行中
 };
 
 /* ============================================================ */
@@ -43,7 +45,6 @@ let viewer, M, plumeHangar;
 let flyMissile = null, plumeWorld = null, shipMesh = null, losLine = null, predictRing = null;
 let markerSprite = null, aimMark = null, planPath = null, trail = null, boom = null;
 let clipPlane = null;
-const strikeSim = new StrikeSim();
 const missionSim = new MissionSim();
 const HANGAR_Y = 5.15;
 
@@ -83,7 +84,7 @@ function projectToScreen(v3) {
   };
 }
 function updateLabels(dt) {
-  const show = S.labelsOn && (S.chapter === 1 || S.chapter === 2);
+  const show = S.labelsOn && S.station !== 'range';
   const focusKey = window.__focusPart?.key ?? null;
   let anyVisible = false;
   if (show) {
@@ -154,41 +155,28 @@ function buildPartsCards() {
   }
 }
 
-/* ---------- 数据面板: 遥测模板 ---------- */
-function teleTemplate(kind) {
-  const teleBox = $('#tabTele');
-  if (kind === 'strike') {
-    teleBox.innerHTML = `
-      <div class="phase-strip"><span class="phase-badge" id="stBadge">搜索</span>
-        <span class="phase-note" id="stNote">导引头正在截获目标…</span></div>
-      <div class="tele-grid">
-        <div class="tele-cell hi"><small>弹目距离</small><b><span id="tDist">—</span><i>m</i></b></div>
-        <div class="tele-cell"><small>接近速度</small><b><span id="tClose">—</span><i>m/s</i></b></div>
-        <div class="tele-cell"><small>指令过载</small><b><span id="tG">—</span><i>g</i></b></div>
-        <div class="tele-cell"><small>飞行马赫</small><b><span id="tMach">—</span><i>Ma</i></b></div>
-      </div>
-      <div class="mini-canvas-wrap"><h4>制导律 · 比例导引 a = N·Vc·λ̇</h4>
-        <canvas id="pnCanvas"></canvas></div>
-      <div class="station-card open" style="cursor:default">
-        <div class="station-name">为什么“转得越快越危险”？</div>
-        <div class="station-detail" style="display:block">若视线在旋转（λ̇≠0），说明导弹没有正对前置碰撞点。比例导引以 <b>N·Vc·λ̇</b> 下达侧向指令，把视线转率<strong style="color:#57d294">压向零</strong>——视线一旦平直，弹目必然相遇。</div>
-      </div>`;
-  } else {
-    teleBox.innerHTML = `
-      <div class="phase-strip"><span class="phase-badge" id="msBadge">待发射</span>
-        <span class="phase-note" id="msNote">按下发射，沿时间轴回放全程。</span></div>
-      <div class="tele-grid">
-        <div class="tele-cell hi"><small>T+</small><b><span id="tTime">00.0</span><i>s</i></b></div>
-        <div class="tele-cell hi"><small>高度</small><b><span id="tAlt">0.0</span><i>km</i></b></div>
-        <div class="tele-cell"><small>速度</small><b><span id="tSpd">0</span><i>m/s</i></b></div>
-        <div class="tele-cell"><small>马赫</small><b><span id="tMach2">0.00</span><i>Ma</i></b></div>
-        <div class="tele-cell"><small>射程</small><b><span id="tRng">0.0</span><i>km</i></b></div>
-        <div class="tele-cell"><small>过载</small><b><span id="tGm">0.0</span><i>g</i></b></div>
-      </div>
-      <div class="mini-canvas-wrap"><h4>速度—高度剖面（示意）</h4><canvas id="profCanvas"></canvas></div>
-      <div class="mini-canvas-wrap"><h4>速度色标</h4>
-        <canvas id="legendCv" style="height:26px"></canvas></div>`;
-  }
+/* ---------- 数据面板: 飞行遥测（靶场工位） ---------- */
+function teleTemplate() {
+  $('#tabTele').innerHTML = `
+    <div class="phase-strip"><span class="phase-badge" id="msBadge">待发射</span>
+      <span class="phase-note" id="msNote">按下发射，沿时间轴回放全程。</span></div>
+    <div class="tele-grid">
+      <div class="tele-cell hi"><small>T+</small><b><span id="tTime">00.0</span><i>s</i></b></div>
+      <div class="tele-cell hi"><small>高度</small><b><span id="tAlt">0.0</span><i>km</i></b></div>
+      <div class="tele-cell"><small>速度</small><b><span id="tSpd">0</span><i>m/s</i></b></div>
+      <div class="tele-cell"><small>马赫</small><b><span id="tMach2">0.00</span><i>Ma</i></b></div>
+      <div class="tele-cell"><small>射程</small><b><span id="tRng">0.0</span><i>km</i></b></div>
+      <div class="tele-cell"><small>过载</small><b><span id="tGm">0.0</span><i>g</i></b></div>
+    </div>
+    <div class="mini-canvas-wrap"><h4>速度—高度剖面（示意）</h4><canvas id="profCanvas"></canvas></div>
+    <div class="mini-canvas-wrap"><h4>末段制导律 · 需用过载 a = N·Vc·λ̇</h4>
+      <canvas id="pnCanvas"></canvas></div>
+    <div class="station-card open" style="cursor:default">
+      <div class="station-name">为什么“视线转得越快越危险”？</div>
+      <div class="station-detail" style="display:block">只要视线在旋转（λ̇≠0），就说明导弹没对准未来的碰撞点。比例导引按 <b>a = N·Vc·λ̇</b> 下达侧向指令，把视线转率<strong style="color:#57d294">压向零</strong>——视线一旦被拉直，弹目必然相遇。末段把左侧 HUD 的“弹目距离”和这条曲线对着看，最直观。</div>
+    </div>
+    <div class="mini-canvas-wrap"><h4>速度色标</h4>
+      <canvas id="legendCv" style="height:26px"></canvas></div>`;
 }
 
 /* ---------- 小图表 ---------- */
@@ -269,63 +257,78 @@ function drawLegend() {
 /* ============================================================ */
 /*                     章 节 调 度                                */
 /* ============================================================ */
-const CHAPTERS = [
-  { tag: '第 1 章', en: 'CHAPTER 01', big: '结构解剖', title: '认识一枚导弹' },
-  { tag: '第 2 章', en: 'CHAPTER 02', big: '动力原理', title: '推力从哪里来' },
-  { tag: '第 3 章', en: 'CHAPTER 03', big: '制导追击', title: '如何咬住目标' },
-  { tag: '第 4 章', en: 'CHAPTER 04', big: '全程弹道', title: '从点火到命中' },
-];
+/* 三个工位：同一个实验台上的三个位置，不是四段互不相干的课本章节 */
+const STATIONS: any = {
+  assembly: {
+    idx: 0, cn: '装配台', en: 'ASSEMBLY',
+    goal: '拖动爆炸滑杆把这枚导弹拆开，或直接点击任意部件查看它的档案。',
+    cam: [5.8, 1.5, 11.4], tgt: [0, .15, 0],
+    hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件查看详情',
+  },
+  bench: {
+    idx: 1, cn: '试车台', en: 'TEST BENCH',
+    goal: '点火试车：看星型药柱退移、推力曲线，以及喷管里喷出的高温燃气。',
+    cam: [3.6, -2.9, 7.8], tgt: [0, -3.3, 0],
+    hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件查看详情',
+  },
+  range: {
+    idx: 2, cn: '靶场', en: 'RANGE',
+    goal: '发射！一条时间轴走完 助推 → 惯性中段 → 末段导引 → 命中，末段自动画出视线连线。',
+    hintDrag: '镜头自动驾驶中', hintClick: '末段自动进入末端特写 · 可拖动时间轴回放',
+  },
+};
+const STATION_ORDER = ['assembly', 'bench', 'range'];
 window.__focusPart = { key: null };
 
-function goChapter(n, opts: any = {}) {
-  n = Math.max(1, Math.min(4, n));
-  const changed = n !== S.chapter;
-  S.chapter = n;
-  const C = CHAPTERS[n - 1];
-  $('#chTag').textContent = C.tag;
-  $('#chTitle').textContent = C.title;
-  $('#chGoal').textContent = [
-    '拖动爆炸滑杆拆开导弹，或直接点击部件查看档案。',
-    '点火试车：看药柱退移、推力曲线和喷管里的燃气。',
-    '对手开始机动！观察视线连线被比例导引“拉直”的过程。',
-    '发射！拖动时间轴回放助推—中段—末段的全过程。'
-  ][n - 1];
+function goStation(key, opts: any = {}) {
+  if (!STATIONS[key]) key = 'assembly';
+  const changed = key !== S.station;
+  S.station = key;
+  const C = STATIONS[key];
+
+  // 工位按钮态 + 提示文案
+  $$('.station-btn').forEach(b => b.classList.toggle('active', b.dataset.station === key));
+  $('#stGoal').textContent = C.goal;
+  $('#hintDrag').textContent = C.hintDrag;
+  $('#hintClick').textContent = C.hintClick;
 
   // 桌面分组显隐
-  $('#grpModel').style.display = (n <= 2) ? '' : 'none';
-  $('#grpMotor').style.display = n === 2 ? '' : 'none';
-  $('#grpStrike').style.display = n === 3 ? '' : 'none';
-  $('#grpMission').style.display = n === 4 ? '' : 'none';
+  $('#grpModel').style.display = key === 'assembly' ? '' : 'none';
+  $('#grpMotor').style.display = key === 'bench' ? '' : 'none';
+  $('#grpRange').style.display = key === 'range' ? '' : 'none';
 
-  // 章节闪现动画
+  // 工位转场闪现
   if (changed || opts.flash) {
-    $('#mfSub').textContent = C.en; $('#mfBig').textContent = C.big;
+    $('#mfSub').textContent = C.en; $('#mfBig').textContent = C.cn;
     const mf = $('#modeFlash');
     mf.classList.remove('show'); void mf.offsetWidth; mf.classList.add('show');
     setTimeout(() => mf.classList.remove('show'), 1500);
   }
 
-  // 场景模式切换
   stopAllSims();
-  if (n <= 2) {
-    viewer.setWorldMode(false);
-    if (n === 2) viewer.flyCam([3.6, HANGAR_Y - 2.9, 7.8], [0, HANGAR_Y - 3.3, 0]);   // 试车台: 喷管侧后特写
-    else viewer.flyCam([5.8 * (S.spinOn ? -1 : 1), HANGAR_Y + 1.5 + S.explore * .5, 11.4], [0, HANGAR_Y + .15 + S.explore * 1.2]);
-    setPanelTab('parts', n === 1 ? '部件档案 · 整弹视图' : '部件档案 · 试车台');
-  } else if (n === 3) {
-    enterStrike(opts.snap !== false);
-    setPanelTab('tele', '追击遥测 · 拦截演示');
+  if (key === 'range') {
+    enterRange(opts.snap !== false);
+    setPanelTab('tele', '飞行遥测 · 全任务');
   } else {
-    enterMission(opts.snap !== false);
-    setPanelTab('tele', '任务遥测 · 全弹道');
+    viewer.setWorldMode(false);
+    const ec = key === 'assembly' ? S.explore * .5 : 0;
+    viewer.flyCam(
+      [C.cam[0] * (S.spinOn ? -1 : 1), HANGAR_Y + C.cam[1] + ec, C.cam[2]],
+      [C.tgt[0], HANGAR_Y + C.tgt[1] + S.explore * 1.2, C.tgt[2]]);
+    setPanelTab('parts', key === 'assembly' ? '部件档案 · 整弹视图' : '部件档案 · 试车台');
   }
 
-  // 提示条文案
-  $('#hintDrag').textContent = n <= 2 ? '拖动旋转 · 滚轮缩放' : '镜头自动驾驶中';
-  $('#hintClick').textContent = n <= 2 ? '点击部件查看详情' : (n === 3 ? '视线连续线=导航的输入' : '时间轴可拖拽回放');
-
   $('#panelRail') && ($('#panelRail').style.display = '');
-  try { localStorage.setItem('mlab_ch', String(n)); } catch (e) { /* 隐私模式忽略 */ }
+  updateHudVisibility();
+  try { localStorage.setItem('mlab_st', key); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+/* HUD 只在靶场工位、且任务已经开始后显示 */
+function updateHudVisibility() {
+  const hud = $('#flightHud');
+  if (!hud) return;
+  const on = S.station === 'range' && (S.missionPlaying || S.mt > 0);
+  hud.classList.toggle('show', !!on);
 }
 
 function setPanelTab(tab, unitText) {
@@ -333,19 +336,15 @@ function setPanelTab(tab, unitText) {
   $('#tabParts').style.display = tab === 'parts' ? '' : 'none';
   $('#tabTele').style.display = tab === 'tele' ? '' : 'none';
   if (unitText) $('#panelHeadUnit').textContent = unitText;
-  if (tab === 'tele') { teleTemplate(S.chapter === 3 ? 'strike' : 'mission'); S.missionChartsDirty = true; }
+  if (tab === 'tele') { teleTemplate(); S.missionChartsDirty = true; }
   else buildPartsCards();
   charts.pn = null;
 }
 
 function stopAllSims() {
-  // 试车复位可视（保留进度）
+  // 试车熄火（保留燃烧进度）
   plumeHangar && plumeHangar.setPower(0);
-  // 追击清理
-  hideStrikeVisuals();
-  strikeSim.state = 'ready';
-  S.strikeState = 'idle';
-  // 任务暂停
+  // 靶场：暂停任务播放
   S.missionPlaying = false;
   updatePauseBtn();
 }
@@ -362,7 +361,7 @@ addEventListener('pointerup', e => {
   if (!downXY) return;
   const moved = Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]);
   downXY = null;
-  if (moved > 6 || S.chapter > 2) return;
+  if (moved > 6 || S.station === 'range') return;
   const el = document.elementFromPoint(e.clientX, e.clientY);
   if (el && (el.closest('.control-desk') || el.closest('.data-panel') || el.closest('.overlay-top'))) return;
   pointer.x = (e.clientX / innerWidth) * 2 - 1;
@@ -448,7 +447,7 @@ function setupBurnUI() {
 }
 
 function tickBurn(dt) {
-  if (!(S.burning && S.chapter === 2)) return;
+  if (!(S.burning && S.station === 'bench')) return;
   S.clock += dt;
   const f = Math.min(S.clock / S.BURN_T, 1);
   M.updateBurn(f);
@@ -480,9 +479,9 @@ function updateThrustReadout(prof) {
 }
 
 /* ============================================================ */
-/*              第 3 章 · 追击演示 (视觉接线)                      */
+/*              靶场 · 飞行体视觉接线（弹 + 目标舰 + 导引可视化）     */
 /* ============================================================ */
-function ensureStrikeVisuals() {
+function ensureRangeVisuals() {
   if (!boom) { boom = new Boom(viewer.scene); }   // 命中爆炸两组章共用
   if (!shipMesh) {
     shipMesh = buildShip(155);
@@ -513,101 +512,122 @@ function findNozzleTip(rootObj) {
   rootObj.traverse(o => { if (o.name === 'nozzleTip') res = o; });
   return res || new THREE.Object3D();
 }
-function hideStrikeVisuals() {
-  shipMesh && (shipMesh.visible = false);
+function hideRangeFlight() {
   flyMissile && (flyMissile.visible = false);
   plumeWorld && plumeWorld.group.visible && plumeWorld.setPower(0);
   losLine && (losLine.visible = false);
   predictRing && (predictRing.visible = false);
+  shipMesh && (shipMesh.visible = false);
 }
-function strikeReset(first = false) {
-  ensureStrikeVisuals();
-  strikeSim.reset();
-  S.strikeState = 'running';
-  shipMesh.visible = true;
-  flyMissile.visible = true;
-  losLine.geometry.attributes;   // noop
-  chip($('#strikeChip'), '交战 ENGAGED', 'fly');
-  $('#strikeBtn').textContent = '战斗进行中…';
-  if (!first) viewer.flyCam([strikeSim.shipPos.x / 1000 + 2.6, 3.4, strikeSim.shipPos.z / 1000 + 5.4],
-    [strikeSim.shipPos.x / 1000, .3, strikeSim.shipPos.z / 1000], 1.2);
+
+/* ============================================================
+   目标舰：用“命中时刻恰好抵达瞄准点”反推它的运动
+   这样弹道积分器一行都不用改，弹目关系仍然物理自洽——
+   导弹瞄准的是未来位置，所以末段一开始，目标正好在前方。
+   ============================================================ */
+const _zero = new THREE.Vector3();
+const SHIP_VEL = new THREE.Vector3(-11.5, 0, 3.4);      // ≈ 12 m/s（约 23 节）横向规避
+function shipVelocity() { return S.targetMove ? SHIP_VEL : _zero; }
+function missionDuration() {
+  const sm = missionSim.samples;
+  return sm.length ? sm[sm.length - 1].t : 0;
 }
-strikeSim.onHit = sim => {
-  S.strikeState = 'hit';
-  boom.fire(sim.hitPoint, 120);
-  viewer.shakeAt(.3);
-  plumeWorld.setPower(0);
-  flyMissile.visible = false;
-  losLine.visible = false;
-  predictRing.visible = false;
-  chip($('#strikeChip'), '命中 HIT!', '');
-  $('#strikeBtn').textContent = '再来一局';
-  $('#stBadge') && ($('#stBadge').textContent = '命中', $('#stBadge').className = 'phase-badge terminal');
-  $('#stNote') && ($('#stNote').textContent = `近炸引信起爆！最小弹目距离 ${sim.minDist.toFixed(0)} m`);
+/** 命中点 = 弹道最后一个采样（落到海面处） */
+function impactPoint(out) {
+  const sm = missionSim.samples;
+  if (!sm.length) return out.set(missionSim.params.aimX, 6, 0);
+  const last = sm[sm.length - 1];
+  return out.set(last.px, 6, last.pz);
+}
+function shipPosAt(t, out) {
+  return out.copy(impactPoint(_impV)).addScaledVector(shipVelocity(), t - missionDuration());
+}
+
+/* ---------- 末段导引可视化：视线连线 + 预测命中点 + 弹目读数 ---------- */
+const _impV = new THREE.Vector3();
+const _mPos = new THREE.Vector3(), _mVel = new THREE.Vector3();
+const _sPos = new THREE.Vector3(), _sVel = new THREE.Vector3();
+const _relV = new THREE.Vector3(), _rdV = new THREE.Vector3(), _crV = new THREE.Vector3();
+/** 供 predictedIntercept 复用的轻量伪 sim（它只读这四个字段） */
+const _pseudo: any = {
+  missilePos: new THREE.Vector3(), missileVel: new THREE.Vector3(),
+  shipPos: new THREE.Vector3(), shipVel: new THREE.Vector3(),
 };
-strikeSim.onStop = sim => {
-  if (S.strikeState === 'hit') return;
-  S.strikeState = 'timeout';
-  chip($('#strikeChip'), '脱靶 MISS', '');
-  $('#strikeBtn').textContent = '再来一局';
-  $('#stBadge') && ($('#stBadge').textContent = '脱靶', $('#stBadge').className = 'phase-badge');
-  $('#stNote') && ($('#stNote').textContent = `燃料耗尽仍差 ${sim.minDist.toFixed(0)} m —— 试试重置对手换个角度。`);
-};
-function enterStrike(snap = true) {
-  stopAllSims();
-  viewer.setWorldMode(true);
-  ensureStrikeVisuals();
-  strikeSim.reset();
-  shipMesh.visible = true; flyMissile.visible = true;
-  S.strikeState = 'idle';
-  chip($('#strikeChip'), '待命 STANDBY');
-  $('#strikeBtn').textContent = '开始追击';
-  plumeWorld.setPower(0);
-  if (snap) viewer.snapView([strikeSim.shipPos.x / 1000 + 4, 3.8, strikeSim.shipPos.z / 1000 + 7],
-    [strikeSim.shipPos.x / 1000, .2, strikeSim.shipPos.z / 1000]);
+/** t 时刻的导弹速度（相邻采样差分） */
+function missionVelAt(t, out) {
+  const sm = missionSim.samples;
+  if (!sm.length) return out.set(0, 0, 0);
+  const a = missionSim.sampleAt(Math.max(0, t - .3));
+  const b = missionSim.sampleAt(Math.min(missionDuration(), t + .3));
+  const dtt = Math.max(b.t - a.t, 1e-3);
+  return out.set((b.px - a.px) / dtt, (b.py - a.py) / dtt, (b.pz - a.pz) / dtt);
 }
-function tickStrike(dt) {
-  if (S.chapter !== 3 || S.strikeState !== 'running') return;
-  const steps = 2;
-  const mult = location.search.includes('fast') ? 4 : 1;   // 慢机器调试加速
-  for (let i = 0; i < steps; i++) strikeSim.step(dt / steps * mult);
-  // 同步视觉
-  shipMesh.position.copy(strikeSim.shipPos);
-  shipMesh.rotation.y = Math.atan2(-strikeSim.shipVel.z, strikeSim.shipVel.x);
-  flyMissile.position.copy(strikeSim.missilePos);
-  orientAlong(flyMissile, strikeSim.missileVel);
-  plumeWorld.setPower(0);   // 拦截弹已脱离助推段，无羽流
-  // 舵偏示意 = 指令过载映射
-  try { M.finAngle.call({ finDirs: findFinDirs(flyMissile) }, clamp(strikeSim.gCmd / 17, -1, 1) * 14 * DEG); } catch (_) {}
-  // LOS
-  if ($('#losBtn').classList.contains('on')) {
-    const posAttr = losLine.geometry.attributes.position;
-    posAttr.setXYZ(0, strikeSim.missilePos.x, strikeSim.missilePos.y, strikeSim.missilePos.z);
-    posAttr.setXYZ(1, strikeSim.shipPos.x, strikeSim.shipPos.y + 14, strikeSim.shipPos.z);
-    posAttr.needsUpdate = true;
-    losLine.visible = true;
-  } else losLine.visible = false;
-  // 预测点
-  if ($('#predictBtn').classList.contains('on')) {
-    predictedIntercept(strikeSim, _pv);
-    predictRing.position.copy(_pv);
-    predictRing.rotation.y += dt * 2;
-    predictRing.scale.setScalar(1 + .1 * Math.sin(performance.now() * .004));
-    predictRing.visible = true;
-  } else predictRing.visible = false;
-  // 相机跟弹(视线朝向目标)
-  camChase(strikeSim.missilePos, strikeSim.missileVel, dt, strikeSim.shipPos);
-  // 遥测 UI
-  const setT = (id, v) => { const e = $(id); if (e) e.textContent = v; };
-  if (Math.random() < .3) {
-    setT('#tDist', strikeSim.dist.toFixed(0));
-    setT('#tClose', strikeSim.closing.toFixed(0));
-    setT('#tG', strikeSim.gCmd.toFixed(1));
-    setT('#tMach', strikeSim.machNow.toFixed(2));
-    if (charts.pn) charts.pn.hist.push(strikeSim.gCmd);
-    else charts.pn = { hist: [strikeSim.gCmd] };
-    drawPNChart();
+function updateGuidance(s) {
+  const terminal = !!s && s.ph === 2;
+  const setT2 = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+  if (!terminal) {
+    if (losLine) losLine.visible = false;
+    if (predictRing) predictRing.visible = false;
+    setT2('#mSepVal', '— m'); setT2('#mCloseVal', '— m/s'); setT2('#mGVal', '— G');
+    setT2('#hudSep', '—');
+    return;
   }
+  _mPos.set(s.px, s.py, s.pz);
+  missionVelAt(s.t, _mVel);
+  shipPosAt(s.t, _sPos);
+  _sVel.copy(shipVelocity());
+
+  // 视线连线（LOS）
+  if (losLine) {
+    if ($('#losBtn').classList.contains('on')) {
+      const pa = losLine.geometry.attributes.position;
+      pa.setXYZ(0, _mPos.x, _mPos.y, _mPos.z);
+      pa.setXYZ(1, _sPos.x, _sPos.y + 14, _sPos.z);
+      pa.needsUpdate = true;
+      losLine.visible = true;
+    } else losLine.visible = false;
+  }
+  // 预测命中点（平面匀速直线近似解 |Δp + Δv·t| 最小）
+  if (predictRing) {
+    if ($('#predictBtn').classList.contains('on')) {
+      _pseudo.missilePos.copy(_mPos); _pseudo.missileVel.copy(_mVel);
+      _pseudo.shipPos.copy(_sPos); _pseudo.shipVel.copy(_sVel);
+      predictedIntercept(_pseudo, _pv);
+      predictRing.position.copy(_pv);
+      predictRing.rotation.y += .02;
+      predictRing.scale.setScalar(1 + .1 * Math.sin(performance.now() * .004));
+      predictRing.visible = true;
+    } else predictRing.visible = false;
+  }
+  // 弹目读数 + 比例导引的“需用过载” a = N·Vc·λ̇
+  _relV.copy(_sPos).sub(_mPos);
+  const dist = _relV.length();
+  _rdV.copy(_sVel).sub(_mVel);
+  const closing = -_relV.clone().normalize().dot(_rdV);
+  const omega = _crV.copy(_relV).cross(_rdV).divideScalar(Math.max(dist * dist, 1)).length();
+  const gNeed = clamp(4.2 * Math.max(closing, 0) * omega / 9.80665, 0, 40);
+  setT2('#mSepVal', dist.toFixed(0) + ' m');
+  setT2('#mCloseVal', closing.toFixed(0) + ' m/s');
+  setT2('#mGVal', gNeed.toFixed(1) + ' G');
+  setT2('#hudSep', dist.toFixed(0));
+  if (charts.pn) charts.pn.hist.push(gNeed);
+  else charts.pn = { hist: [gNeed] };
+  // 舵偏示意：需用过载 → 舵面偏转
+  try { M.finAngle.call({ finDirs: findFinDirs(flyMissile) }, clamp(gNeed / 17, -1, 1) * 14 * DEG); } catch (_) {}
+}
+
+/* ---------- 飞行 HUD ---------- */
+const PHASE_NAMES = ['助推 BOOST', '惯性中段 MIDCOURSE', '末段导引 TERMINAL', '命中 IMPACT'];
+function updateHud(s) {
+  if (!s) return;
+  const set = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+  set('#hudT', 'T+' + s.t.toFixed(1) + 's');
+  set('#hudAlt', (s.py / 1000).toFixed(1));
+  set('#hudV', s.v.toFixed(0));
+  set('#hudMach', s.mach.toFixed(2));
+  set('#hudG', (s.g || 0).toFixed(1));
+  set('#hudRng', (s.px / 1000).toFixed(1));
+  set('#hudPhase', PHASE_NAMES[s.ph] || '待发射');
 }
 const _pv = new THREE.Vector3(), _cv = new THREE.Vector3(), _tv = new THREE.Vector3(), _tv2 = new THREE.Vector3();
 function orientAlong(obj, dir) {
@@ -677,16 +697,21 @@ function makeDiamondTex() {
   c.strokeRect(-30, -30, 60, 60);
   return new THREE.CanvasTexture(cv);
 }
-function enterMission(snap = true) {
+function enterRange(snap = true) {
   stopAllSims();
   viewer.setWorldMode(true);
   ensureMissionVisuals();
-  ensureStrikeVisuals();      // flyMissile / plumeWorld 在第3章初始化，直接跳第4章时必须有
-  hideStrikeVisuals();
+  ensureRangeVisuals();       // 弹 / 羽流 / 目标舰 / 视线连线（由靶场统一持有）
+  hideRangeFlight();
   aimMark.position.set(missionSim.params.aimX, 0, 0);
   // 预积分
   missionSim.launch();
   const Sm = missionSim.samples;
+  // 目标舰就位：按“命中时刻抵达瞄准点”反推，末段一开始它就在正前方
+  shipMesh.visible = true;
+  shipPosAt(0, _sPos);
+  shipMesh.position.copy(_sPos);
+  shipMesh.rotation.y = Math.atan2(-shipVelocity().z, shipVelocity().x);
   // 计划路径
   const pts = [];
   for (let i = 0; i < Sm.length; i += 6) pts.push(new THREE.Vector3(Sm[i].px, Sm[i].py, Sm[i].pz));
@@ -704,10 +729,12 @@ function enterMission(snap = true) {
   const s0 = Sm[0];
   flyMissile.position.set(s0.px, s0.py, s0.pz);
   orientAlong(flyMissile, new THREE.Vector3(Math.cos(79 * DEG), Math.sin(79 * DEG), 0));
+  try { M.finAngle.call({ finDirs: findFinDirs(flyMissile) }, 0); } catch (_) {}
   plumeWorld && plumeWorld.setPower(0);
   markerSprite.visible = false;
   requestAnimationFrame(drawTimeline);
   drawProfileChart(); drawLegend();
+  updateHud(s0);
 }
 function chipLaunchIdle() {
   chip($('#launchBtn'), '发射', '');     // btn-primary 自带样式即可
@@ -788,9 +815,19 @@ function seekMission(tt) {
   if (dv.lengthSq() > 1) orientAlong(flyMissile, dv);
   plumeWorld.setPower(s.ph === 0 ? .88 : 0);
   trailRebuildTo(Math.round(S.mt / missionSim.dt / 4));
+  // 目标舰与导引可视化随时间轴同步
+  if (shipMesh) {
+    shipPosAt(S.mt, _sPos);
+    shipMesh.position.copy(_sPos);
+    shipMesh.rotation.y = Math.atan2(-shipVelocity().z, shipVelocity().x);
+    shipMesh.visible = true;
+  }
+  updateGuidance(s);
+  updateHud(s);
   $('#launchBtn').textContent = S.missionEnded ? '重新发射' : '继续';
   drawTimeline();
   missionUIOnce(s);
+  updateHudVisibility();
 }
 function trailRebuildTo(count) {
   if (!trail || !missionSim.samples.length) return;
@@ -811,24 +848,39 @@ function missionUIOnce(s) {
   setT('#tGm', (s.g || 0).toFixed(1));
   const badge = $('#msBadge');
   if (badge) {
-    const names = ['助推 BOOST', '惯性中段 MIDCOURSE', '末段俯冲 TERMINAL', '命中 IMPACT'];
-    badge.textContent = names[s.ph];
+    badge.textContent = PHASE_NAMES[s.ph] || '待发射';
     badge.className = 'phase-badge ' + ['', 'midcourse', 'terminal', 'terminal'][s.ph];
-    $('#tlPhaseNow').textContent = names[s.ph];
+    $('#tlPhaseNow').textContent = PHASE_NAMES[s.ph] || '待发射';
+  }
+  const note = $('#msNote');
+  if (note) {
+    note.textContent = [
+      '固体火箭发动机全推力工作，程序角控制转弯。',
+      '发动机已关机，靠惯性爬升——弹道最高、阻力最小的一段。',
+      '导引头截获目标！比例导引把视线转率压向零，舵面开始大幅偏转。',
+      '近炸引信起爆，战斗部破片覆盖目标。'
+    ][s.ph] || '';
   }
 }
-function tickMission(dt) {
-  if (S.chapter !== 4 || !S.missionPlaying || S.missionEnded) return;
+let _pnTick = 0;
+function tickRange(dt) {
+  if (S.station !== 'range' || !S.missionPlaying || S.missionEnded) return;
   const sm = missionSim.samples;
   S.mt += dt * S.spd * (location.search.includes('fast') ? 4 : 1);
   const dur = sm[sm.length - 1].t;
   if (S.mt >= dur) {
     S.mt = dur; S.missionPlaying = false; S.missionEnded = true;
     updatePauseBtn();
-    chip($('#launchBtn'), '', '');
     $('#launchBtn').textContent = '重新发射';
+    // 命中：在目标舰处起爆
+    impactPoint(_impV);
+    boom.fire(new THREE.Vector3(_impV.x, 16, _impV.z), 130);
+    viewer.shakeAt(.32);
+    if (losLine) losLine.visible = false;
+    if (predictRing) predictRing.visible = false;
   }
   const s = missionSim.sampleAt(S.mt);
+  flyMissile.visible = true;
   flyMissile.position.set(s.px, s.py, s.pz);
   const nxt = missionSim.sampleAt(S.mt + .1);
   if (nxt && nxt !== s) {
@@ -837,14 +889,19 @@ function tickMission(dt) {
   }
   plumeWorld.setPower(s.ph === 0 ? .88 : 0);
   if (trail) trail.push(s.px, s.py, s.pz, s.v);
-  // 相机: 默认跟随
-  if (curMissionCam === 'follow') {
-    const vdir = _cvtmp(_pv2.set(s.px, s.py, s.pz).sub(missionSim.sampleAt(Math.max(0, S.mt - 1.2))).lengthSq() > 0 ? _pv3.set(nxtSafe(s).px - s.px, nxtSafe(s).py - s.py, nxtSafe(s).pz - s.pz) : _pv4.set(1, 0, 0));
-    void vdir;
+  // 目标舰随任务时间推进
+  if (shipMesh) {
+    shipPosAt(S.mt, _sPos);
+    shipMesh.position.copy(_sPos);
+    shipMesh.rotation.y = Math.atan2(-shipVelocity().z, shipVelocity().x);
+    shipMesh.visible = true;
   }
+  updateGuidance(s);
   camMissionTick(dt, s);
   drawTimeline();
   missionUIOnce(s);
+  updateHud(s);
+  if (++_pnTick % 4 === 0) drawPNChart();
 }
 function nxtSafe(s) { const n = missionSim.sampleAt(s.t + missionSim.dt * 6); return n && n !== s ? n : s; }
 const _pv2 = new THREE.Vector3(), _pv3 = new THREE.Vector3(), _pv4 = new THREE.Vector3();
@@ -852,6 +909,14 @@ let curMissionCam = 'follow';
 let _camAnchor = new THREE.Vector3(9000, 400, 2600);
 function camMissionTick(dt, s) {
   const k = 1 - Math.exp(-dt * (curMissionCam === 'follow' ? 2.4 : 1.4));
+  // 末段导引：跟弹视角自动升级为“末端特写”——挂在弹后、镜头死死咬住目标舰
+  if (curMissionCam === 'follow' && s.ph === 2 && shipMesh) {
+    missionVelAt(s.t, _mVel);
+    camChase(_mPos.set(s.px, s.py, s.pz), _mVel, dt, _sPos);
+    markerSprite && (markerSprite.visible = false);
+    planPath && (planPath.visible = false);
+    return;
+  }
   if (curMissionCam === 'follow') {
     const ahead = nxtSafe(s);
     _cv.set(ahead.px - s.px, ahead.py - s.py, ahead.pz - s.pz).normalize();
@@ -916,32 +981,32 @@ function bindUI() {
   // 试车
   setupBurnUI();
 
-  // 追击
-  $('#strikeBtn').addEventListener('click', function () {
-    if (this.textContent.includes('战斗')) return;
-    strikeReset(false);
-  });
-  $('#strikeReset').addEventListener('click', () => enterStrike(true));
-  $('#losBtn').addEventListener('click', function () { this.classList.toggle('on'); });
-  $('#predictBtn').addEventListener('click', function () { this.classList.toggle('on'); });
+  // 工位切换（手动切换会中断全流程演示）
+  $$('.station-btn').forEach(b => b.addEventListener('click', () => {
+    stopShow();
+    goStation(b.dataset.station);
+  }));
+  $('#fullShowBtn').addEventListener('click', () => S.showRunning ? stopShow() : runFullShow());
 
-  // 任务
-  $('#launchBtn').addEventListener('click', function () {
-    if (S.missionEnded || S.mt > 0 && S.mt >= missionSim.samples[missionSim.samples.length - 1].t - .01) {
-      enterMission(false);
-      beginPlay();
-      return;
-    }
-    enterMission(false);            // 发射/重新发射: 一律重置并立即起飞
-    beginPlay();
-  });
+  // 靶场任务
+  $('#launchBtn').addEventListener('click', function () { stopShow(); beginPlay(); });
   function beginPlay() {
-    if (S.missionEnded) { enterMission(false); }
-    S.missionPlaying = true; updatePauseBtn();
+    enterRange(false);              // 发射/重新发射: 一律重置并立即起飞
+    S.missionPlaying = true; S.missionEnded = false;
+    updatePauseBtn();
     $('#launchBtn').textContent = '重新发射';
     $('#pauseBtn').textContent = '暂停';
     $('#pauseBtn').disabled = false;
+    updateHudVisibility();
   }
+  // 导引可视化开关
+  $('#losBtn').addEventListener('click', function () { this.classList.toggle('on'); });
+  $('#predictBtn').addEventListener('click', function () { this.classList.toggle('on'); });
+  $('#targetMoveBtn').addEventListener('click', function () {
+    S.targetMove = !S.targetMove;
+    this.classList.toggle('on', S.targetMove);
+    if (S.station === 'range') seekMission(S.mt);   // 立即重算目标位置
+  });
   $('#pauseBtn').addEventListener('click', () => {
     S.missionPlaying = !S.missionPlaying; updatePauseBtn();
     $('#pauseBtn').textContent = S.missionPlaying ? '暂停' : '继续';
@@ -960,7 +1025,7 @@ function bindUI() {
       viewer.flyCam(null, null);
     }
   }));
-  $('#missionReset').addEventListener('click', () => enterMission(true));
+  $('#missionReset').addEventListener('click', () => { stopShow(); enterRange(true); });
 
   // 面板开合
   $('#panelClose').addEventListener('click', () => {
@@ -972,19 +1037,20 @@ function bindUI() {
     $('#panelRail').style.display = 'none';
   });
   $$('.panel-tab').forEach(b => b.addEventListener('click', () => {
-    if (S.chapter <= 2 && b.dataset.tab === 'tele') return;   // 第1/2章暂无遥测
+    if (S.station !== 'range' && b.dataset.tab === 'tele') return;   // 只有靶场有遥测
     setPanelTab(b.dataset.tab, undefined);
   }));
 
-  // 键盘
+  // 键盘：← → 切工位，空格在当前工位执行主操作
   addEventListener('keydown', e => {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-    if (e.key === 'ArrowRight') goChapter(S.chapter + 1);
-    else if (e.key === 'ArrowLeft') goChapter(S.chapter - 1);
+    const i = STATIONS[S.station].idx;
+    if (e.key === 'ArrowRight') { stopShow(); goStation(STATION_ORDER[Math.min(i + 1, 2)]); }
+    else if (e.key === 'ArrowLeft') { stopShow(); goStation(STATION_ORDER[Math.max(i - 1, 0)]); }
     else if (e.code === 'Space') {
       e.preventDefault();
-      if (S.chapter === 3) $('#strikeBtn').click();
-      else if (S.chapter === 4) $('#launchBtn').click();
+      if (S.station === 'range') { stopShow(); $('#launchBtn').click(); }
+      else if (S.station === 'bench') $('#igniteBtn').click();
     }
     else if (e.key.toLowerCase() === 'l') $('#labelBtn').click();
     else if (e.key.toLowerCase() === 'c') $('#cutawayBtn').click();
@@ -992,11 +1058,54 @@ function bindUI() {
       const target = S.explore > .5 ? 0 : 1;
       animExplore(target);
     }
+    else if (e.key === 'Escape') stopShow();
   });
+}
 
-  // 章节导航按钮
-  $('#navPrev').onclick = () => goChapter(S.chapter - 1);
-  $('#navNext').onclick = () => goChapter(S.chapter + 1);
+/* ============================================================
+   全流程演示：合拢 → 点火 → 发射 → 全弹道 → 命中
+   一条时间线贯穿三个工位，相机全程自动导演
+   ============================================================ */
+const showTimers: any[] = [];
+function stopShow() {
+  S.showRunning = false;
+  while (showTimers.length) clearTimeout(showTimers.pop());
+  const b = $('#fullShowBtn');
+  if (b) {
+    b.classList.remove('playing');
+    const tri = b.querySelector('.tri'); if (tri) tri.textContent = '▶';
+    const lbl = b.querySelector('span:last-child'); if (lbl) lbl.textContent = '全流程演示';
+  }
+}
+function showStep(fn, ms) {
+  showTimers.push(setTimeout(() => { if (S.showRunning) fn(); }, ms));
+}
+function runFullShow() {
+  stopShow();
+  S.showRunning = true;
+  const b = $('#fullShowBtn');
+  if (b) {
+    b.classList.add('playing');
+    const tri = b.querySelector('.tri'); if (tri) tri.textContent = '■';
+    const lbl = b.querySelector('span:last-child'); if (lbl) lbl.textContent = '演示中 · 点击停止';
+  }
+  // ① 装配台：先把散开的舱段合拢
+  goStation('assembly', { snap: true });
+  animExplore(0);
+  // ② 试车台：点火，看药柱退移与体积火焰
+  showStep(() => {
+    goStation('bench', { snap: true });
+    showStep(() => $('#igniteBtn').click(), 950);
+  }, 1800);
+  // ③ 靶场：发射，走完助推 → 中段 → 末段 → 命中
+  showStep(() => {
+    goStation('range', { snap: true });
+    showStep(() => {
+      $('#launchBtn').click();
+      const dur = missionSim.samples.length ? missionSim.samples[missionSim.samples.length - 1].t : 60;
+      showStep(() => stopShow(), dur / S.spd * 1000 + 2600);
+    }, 1300);
+  }, 6800);
 }
 let exploreAnim = null;
 function animExplore(to) {
@@ -1036,8 +1145,7 @@ function loop() {
   const dt = Math.min((now - lastT) / 1000, .12);   // 低帧率下避免慢动作(子步长内再细分)
   lastT = now;
   tickBurn(dt);
-  tickStrike(dt);
-  tickMission(dt);
+  tickRange(dt);
   plumeHangar.update(dt);
   plumeWorld && plumeWorld.update(dt);
   boom && boom.update(dt);
@@ -1093,18 +1201,21 @@ async function boot() {
   $('#loader').classList.add('done');
   window.__MLAB_READY = true;
   window.dispatchEvent(new Event('mLabReady'));
-  goChapter(1, { flash: false, snap: true });
-  // 深链：#chapter=N 直达章节（验证/分享用），#view= 覆盖机位
+  goStation('assembly', { flash: false, snap: true });
+  // 深链：#station=assembly|bench|range 直达工位；#chapter=N 保留旧链接兼容
+  const ms = location.hash.match(/station=(assembly|bench|range)/);
+  if (ms) goStation(ms[1], { flash: false, snap: true });
   const mc = location.hash.match(/chapter=([1-4])/);
-  if (mc && mc[1] !== '1') goChapter(+mc[1], { flash: false, snap: true });
+  if (mc && !ms) goStation(['assembly', 'bench', 'range', 'range'][+mc[1] - 1], { flash: false, snap: true });
   const mv = location.hash.match(/view=([-\d.,|]+)/);
   if (mv) {
     const [p, t] = mv[1].split('|').map(s => s.split(',').map(Number));
     if (p && p.length === 3) viewer.snapView(p, t || [0, 0, 0]);
   }
-  // 验证/演示：自动触发点火或发射
-  if (/[?&]ignite=1/.test(location.hash)) setTimeout(() => $('#igniteBtn')?.click(), 700);
-  if (/[?&]launch=1/.test(location.hash)) setTimeout(() => $('#launchBtn')?.click(), 700);
+  // 验证/演示：自动点火、发射、完整演示
+  if (/[?&]ignite=1/.test(location.hash)) setTimeout(() => { goStation('bench'); setTimeout(() => $('#igniteBtn')?.click(), 600); }, 700);
+  if (/[?&]launch=1/.test(location.hash)) setTimeout(() => { goStation('range'); setTimeout(() => $('#launchBtn')?.click(), 600); }, 700);
+  if (/[?&]show=1/.test(location.hash)) setTimeout(() => runFullShow(), 900);
   loop();
 }
 

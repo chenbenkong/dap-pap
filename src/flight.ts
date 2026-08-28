@@ -156,9 +156,12 @@ export class MissionSim {
     let pos = new THREE.Vector3(0, 4, 0), vel = new THREE.Vector3();
     let phase = 0;                     // 0 助推 1 中段 2 末段 3 命中
     const S = this.samples = [];
-    const push = (g, ph) => S.push({ t, px: pos.x, py: pos.y, pz: pos.z, v: vel.length(), mach: vel.length() / sos(pos.y), g, ph });
+    const push = (g, ph, gl = 0) => S.push({
+      t, px: pos.x, py: pos.y, pz: pos.z, v: vel.length(),
+      mach: vel.length() / sos(pos.y), g, gl, ph,
+    });
     push(0, 0);
-    let gLoad = 0;
+    let gLoad = 0, gLat = 0, gPeak = 0, gLatPeak = 0;
     const MAXT = 120;
     while (t < MAXT) {
       const v = vel.length(), h = Math.max(pos.y, 0);
@@ -196,22 +199,37 @@ export class MissionSim {
         const clamped = Math.min(P.nMax * G0, corr.length() * 2.2);
         corr.normalize().multiplyScalar(clamped);
         acc.add(corr);
-        gLoad = clamped / G0;
-        void distH;
+        // 末段总过载 = 扣除重力后的合加速度 / g0（含阻力与机动修正）
+        const ag = _tk.copy(acc).sub(_GRAV);
+        gLoad = ag.length() / G0;
+        // 横向（机动）过载：垂直于速度的分量，受气动舵能力 nMax 约束
+        const vhat = _tl.copy(vel).normalize();
+        gLat = _tm.copy(ag).addScaledVector(vhat, -ag.dot(vhat)).length() / G0;
+        void distH; void cur;
       } else {
-        gLoad = acc.clone().sub(new THREE.Vector3(0, -G0 * (burnLeft > 0 ? m * G0 : 0), 0)).length() / G0;
-        gLoad = Math.abs(gLoad);
+        // 过载 = 扣除重力后弹体"感受到"的加速度 / g0
+        const ag = _tk.copy(acc).sub(_GRAV);
+        gLoad = ag.length() / G0;
+        // 横向（机动）过载：感受加速度垂直于速度的分量
+        if (v > 1) {
+          const vhat = _tl.copy(vel).normalize();
+          gLat = _tm.copy(ag).addScaledVector(vhat, -ag.dot(vhat)).length() / G0;
+        } else gLat = 0;
       }
       vel.addScaledVector(acc, dt);
       pos.addScaledVector(vel, dt);
       t += dt;
-      if (pos.y <= 6 && vel.y < 0) { phase = 3; push(gLoad, 3); break; }
-      if (Math.floor(t / dt) % 1 === 0) push(gLoad, phase);
+      gPeak = Math.max(gPeak, gLoad); gLatPeak = Math.max(gLatPeak, gLat);
+      if (pos.y <= 6 && vel.y < 0) { phase = 3; push(gLoad, 3, gLat); break; }
+      if (Math.floor(t / dt) % 1 === 0) push(gLoad, phase, gLat);
     }
     // 元信息
     let apex = 0, maxV = 0, maxMach = 0;
     for (const s of S) { apex = Math.max(apex, s.py); maxV = Math.max(maxV, s.v); maxMach = Math.max(maxMach, s.mach); }
-    this.meta = { duration: S[S.length - 1].t, range: S[S.length - 1].px / 1000, apex, maxV, maxMach };
+    this.meta = {
+      duration: S[S.length - 1].t, range: S[S.length - 1].px / 1000, apex, maxV, maxMach,
+      gPeak, gLatPeak, missBy: Math.abs(pos.x - P.aimX),
+    };
     return this.samples;
   }
   sampleAt(tt) {
@@ -229,4 +247,6 @@ const _t1 = new THREE.Vector3(), _t2 = new THREE.Vector3(), _t3 = new THREE.Vect
   _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _tc = new THREE.Vector3(),
   _td = new THREE.Vector3(), _te = new THREE.Vector3(), _tf = new THREE.Vector3(),
   _tg = new THREE.Vector3(), _th = new THREE.Vector3(), _ti = new THREE.Vector3(),
+  _tk = new THREE.Vector3(), _tl = new THREE.Vector3(), _tm = new THREE.Vector3(),
+  _GRAV = new THREE.Vector3(0, -G0, 0),
   _omega = new THREE.Vector3();
