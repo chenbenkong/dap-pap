@@ -43,7 +43,7 @@ const S: any = {
   /* 工位：assembly 装配台 / bench 试车台 / range 靶场
      不是"章节"——同一个实验台上的三个位置，一条连续的任务线贯穿其中 */
   station: 'assembly',
-  labelsOn: true, spinOn: false, cutawayOn: false,
+  labelsOn: true, spinOn: false, cutawayOn: false, highlightOn: false,
   explore: .0,            // 爆炸度
   // 试车
   burning: false, clock: 0, BURN_T: 7.0, curProfile: 0, manualScrub: false,
@@ -64,7 +64,7 @@ const S: any = {
    弹体在飞行世界放大 2.6×，相机距离同步放大，比例观感不变
    但本体细节清晰可见。装配台/试车台不受影响（真实比例）。
    ============================================================ */
-const MISSILE_WORLD_SCALE = 4.0;
+const MISSILE_WORLD_SCALE = 5.5;   // 飞行世界放大倍率：弹体更大、跟拍时细节更清楚
 
 /* ============================================================ */
 /*                   场景与模型装配                               */
@@ -73,6 +73,8 @@ let viewer, M, plumeHangar;
 let flyMissile = null, plumeWorld = null, shipMesh = null, losLine = null, predictRing = null;
 let markerSprite = null, aimMark = null, planPath = null, trail = null, boom = null;
 let clipPlane = null;
+// 高亮：一束跟随所选部件的聚光（补光式"光感"，不覆盖原外观、不累计、单件）
+let hlLight = null, hlTarget = null, hlGrp = null;
 const missionSim = new MissionSim();
 const HANGAR_Y = 5.15;
 
@@ -291,13 +293,13 @@ const STATIONS: any = {
     idx: 0, cn: '装配台', en: 'ASSEMBLY',
     goal: '拖动爆炸滑杆把这枚导弹拆开，或直接点击任意部件查看它的档案。',
     // 机位刻意贴近：让弹体撑满画面，细节（蒙皮、铆钉、喷印）才看得见
-    cam: [4.4, 1.1, 8.6], tgt: [0, .15, 0],
+    cam: [3.4, 0.95, 6.6], tgt: [0, .18, 0],
     hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件 → 自动飞到特写',
   },
   bench: {
     idx: 1, cn: '试车台', en: 'TEST BENCH',
     goal: '点火试车：看星型药柱退移、推力曲线，以及喷管里喷出的高温燃气。',
-    cam: [2.8, -2.5, 6.2], tgt: [0, -3.3, 0],
+    cam: [2.0, -1.78, 4.4], tgt: [0, -3.3, 0],
     hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件 → 自动飞到特写',
   },
   range: {
@@ -335,6 +337,7 @@ function goStation(key, opts: any = {}) {
   }
 
   stopAllSims();
+  clearHighlight();          // 切换工位时收掉高亮，避免灯留在旧工位
   if (key === 'range') {
     enterRange(opts.snap !== false);
     setPanelTab('tele', '飞行遥测 · 全任务');
@@ -439,6 +442,8 @@ addEventListener('pointerup', e => {
       o = o.parent;
     }
   }
+  // 点空白：高亮开着就收掉当前高亮（单件高亮，不残留）
+  if (S.highlightOn) clearHighlight();
 });
 
 function selectPart(key, { fly = false } = {}) {
@@ -450,17 +455,13 @@ function selectPart(key, { fly = false } = {}) {
     c.classList.toggle('open', c.dataset.key === key);
     if (c.dataset.key === key) c.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   });
-  // 高亮
-  M.allMats.forEach(m => { if (m.emissiveIntensity !== undefined && m.userData.baseEm === undefined) m.userData.baseEm = m.emissiveIntensity ?? 0; });
-  M.shellMats.forEach(() => {});
-  // 该部件材质发光脉冲
-  const grp = p.anchor.parent;
-  const mats = new Set<any>();
-  grp.traverse(o => { if (o.isMesh && o.material) mats.add(o.material); });
-  mats.forEach(m => { m.emissive = m.emissive || new THREE.Color(0); m.emissive.setHex(0xffb454); });
+  // 高亮：补光式"光感"，只照这一件；开关关着就不亮
+  if (S.highlightOn) applyHighlight(key);
+  else clearHighlight();
   if (fly) {
     // 特写距离按部件实际尺寸自适应：小件（引信环）贴近看细节，
     // 大件（发动机）拉开看全貌，一律用固定 3.1 会让小件显得很远、大件塞满画面。
+    const grp = p.anchor.parent;
     const wp = new THREE.Vector3(); p.anchor.getWorldPosition(wp);
     const box = boxOfMeshes(grp);
     const sph = box.getBoundingSphere(new THREE.Sphere());
@@ -470,16 +471,48 @@ function selectPart(key, { fly = false } = {}) {
     viewer.flyCam([np.x, np.y, np.z], [wp.x, wp.y, wp.z], .9);
     sfx.select();
   }
-  clearTimeout(window.__hlTO);
-  window.__hlTO = setTimeout(() => {
-    mats.forEach(m => {
-      const base = m.userData.baseEm ?? 0;
-      m.emissiveIntensity = base;
-      if (!m.userData.keepEmissive) m.emissive.setHex(m.name === 'accent' ? 0x593407 : 0x000000);
-      if (m.name === 'throat') m.emissive.setHex(0x000000);
-    });
-    window.__focusPart.key = null;
-  }, 2200);
+}
+
+/* 高亮 = 在所选部件旁补一束聚光：本体材质/贴图/颜色完全不动，
+   只是被照得更亮、更有"光感"。部件可随爆炸/自动旋转移动，
+   每帧根据相机方向重算灯位，始终从观察者这一侧打光。 */
+function applyHighlight(key) {
+  const p = M.parts[key];
+  if (!p) return;
+  hlGrp = p.anchor.parent;
+  if (!hlLight) return;
+  // 立即定位一次，updateHighlight 之后每帧续跟
+  hlLight.intensity = 1;           // 占位，真实强度在 updateHighlight 内按尺寸算
+  updateHighlight();
+  sfx.select();
+}
+function clearHighlight() {
+  hlGrp = null;
+  if (hlLight) hlLight.intensity = 0;
+  // 注意：保留 window.__focusPart.key —— 卡片仍选中，只是灯灭；
+  // 这样重新打开开关时能立刻点亮上次点选的部件。
+}
+const _hlCenter = new THREE.Vector3(), _hlView = new THREE.Vector3(), _hlLight = new THREE.Vector3(), _hlUp = new THREE.Vector3(0, 1, 0);
+function updateHighlight() {
+  if (!hlLight || !hlGrp) return;
+  const box = boxOfMeshes(hlGrp);
+  if (box.isEmpty()) return;
+  const sph = box.getBoundingSphere(new THREE.Sphere());
+  const r = Math.max(sph.radius, 0.18);
+  _hlCenter.copy(sph.center);
+  // 从相机这一侧打光：灯位 = 中心 + 视线反方向*3r + 略上抬，
+  // 这样无论怎么转，被选中的部件始终被照亮、且不会把光打到地底下太深
+  _hlView.copy(viewer.camera.position).sub(_hlCenter).normalize();
+  if (_hlView.lengthSq() < 1e-4) _hlView.set(0, .4, 1);
+  _hlLight.copy(_hlCenter).addScaledVector(_hlView, r * 3.0).addScaledVector(_hlUp, r * 0.9);
+  hlLight.position.copy(_hlLight);
+  hlTarget.position.copy(_hlCenter);
+  hlLight.distance = r * 10;
+  hlLight.angle = 0.72;
+  hlLight.penumbra = 0.65;
+  hlLight.decay = 1.7;
+  // 强度随部件尺寸放大：小件(引信环)柔光、大件(发动机)更强，但都被距离衰减限制在本体附近
+  hlLight.intensity = THREE.MathUtils.clamp(r * 34, 16, 82);
 }
 
 /* ============================================================ */
@@ -1202,6 +1235,13 @@ function bindUI() {
   });
   $('#viewGlobal').addEventListener('click', () =>
     viewer.flyCam([6.6, HANGAR_Y + 2.6, 12.2], [0, HANGAR_Y + .1]));
+  // 高亮开关：装配台 / 试车台两处按钮共享同一状态，保持同步
+  $$('.hl-toggle').forEach(b => b.addEventListener('click', function () {
+    S.highlightOn = !S.highlightOn;
+    $$('.hl-toggle').forEach(x => x.classList.toggle('on', S.highlightOn));
+    if (!S.highlightOn) clearHighlight();
+    else if (window.__focusPart.key) applyHighlight(window.__focusPart.key);  // 开着时立即点亮当前已选件
+  }));
   $('#viewFront').addEventListener('click', () =>
     viewer.flyCam([0, HANGAR_Y + .6, 13.4], [0, HANGAR_Y + .2]));
   $('#resetView').addEventListener('click', () =>
@@ -1387,6 +1427,7 @@ function loop() {
   boom && boom.update(dt);
   updateLabels(dt);
   // 自动爆炸小呼吸(ch1未操作时缓慢提示?)
+  updateHighlight();
   viewer.update(dt);
   requestAnimationFrame(loop);
 }
@@ -1409,6 +1450,15 @@ async function boot() {
   viewer.renderer.localClippingEnabled = true;
 
   viewer.hangar.add(M.root);
+
+  // 高亮补光：一盏聚光，挂在机库里，跟随被选部件。默认关（intensity=0）。
+  // 只照部件几何、不碰任何材质，所以原外观 100% 保留，纯粹是"加光感"。
+  hlTarget = new THREE.Object3D();
+  viewer.hangar.add(hlTarget);
+  hlLight = new THREE.SpotLight(0xfff1da, 0, 8, 0.72, 0.65, 1.7);
+  hlLight.target = hlTarget;
+  hlLight.castShadow = false;
+  viewer.hangar.add(hlLight);
   plumeHangar = new Plume(M.nozzleTip);
   plumeHangar.group.visible = false;
   plumeHangar.scale = 1.15;

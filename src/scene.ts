@@ -36,8 +36,8 @@ export function createScene(container) {
   controls.enableDamping = true;
   controls.dampingFactor = .07;
   controls.target.set(0, -.2, 0);
-  controls.minDistance = .8;
-  controls.maxDistance = 30;
+  controls.minDistance = .4;
+  controls.maxDistance = 40;
   controls.maxPolarAngle = Math.PI * .58;
   controls.autoRotateSpeed = .9;
 
@@ -319,8 +319,8 @@ export function createScene(container) {
       camera.near = on ? 2 : .05;
       camera.far = on ? 80000 : 400;
       camera.updateProjectionMatrix();
-      controls.minDistance = on ? 8 : 3.4;
-      controls.maxDistance = on ? 60000 : 30;
+      controls.minDistance = on ? 8 : 1.6;
+      controls.maxDistance = on ? 60000 : 40;
       controls.enablePan = !on ? true : true;
     },
     shakeAt(v = .28) { shake.amp = Math.max(shake.amp, v); },
