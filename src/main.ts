@@ -401,6 +401,9 @@ function setPanelTab(tab, unitText) {
 function stopAllSims() {
   // 试车熄火（保留燃烧进度）
   plumeHangar && plumeHangar.setPower(0);
+  // 停掉所有常驻音效：火箭轰鸣 / 风噪。切工位、重置、离开靶场都走这里，
+  // 否则从靶场切回装配台时轰鸣会一直响（"一直有声音"的元凶之一）。
+  sfx.rocketOff(); sfx.windOff();
   // 靶场：暂停任务播放
   S.missionPlaying = false;
   updatePauseBtn();
@@ -1558,8 +1561,12 @@ function tickExplode() {
   decompRing.rotation.z += .0016;
 }
 /** 任何一帧里抛异常都会让 requestAnimationFrame 断掉、整个应用永久卡死。
-    这里把 rAF 排在最前面，并逐个子系统隔离，单点出错只丢该模块，画面继续跑。 */
+    这里把 rAF 排在最前面，并逐个子系统隔离，单点出错只丢该模块，画面继续跑。
+    同时把错误记进 _guardLog，供 #debug 节点输出，方便无头排查。 */
+const _guardLog: string[] = [];
 function guardErr(tag, e) {
+  _guardLog.push(`${tag}: ${e && e.message ? e.message : e}`);
+  if (_guardLog.length > 8) _guardLog.shift();
   if (_guardCount++ < 4) console.warn('[dap-pap] ' + tag + ' 出错已隔离：', e);
 }
 function loop() {
@@ -1759,6 +1766,7 @@ function dumpSceneStats() {
     camDist: fly ? +camPos.distanceTo(fly).toFixed(1) : null,
     camAboveGround: camPos.y > 0,
     missileInView: fly ? frustum.containsPoint(fly) : null,
+    guardedErrors: _guardLog.slice(),
   });
   document.body.appendChild(d);
 }
