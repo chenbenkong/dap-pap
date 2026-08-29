@@ -400,22 +400,64 @@ export class Boom {
 /* ================= 迷你驱逐舰（拦截目标）================= */
 export function buildShip(lenM = 150) {
   const g = new THREE.Group();
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0x51403a, metalness: .25, roughness: .7 });
-  const topMat = new THREE.MeshStandardMaterial({ color: 0x665650, metalness: .2, roughness: .78 });
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(lenM, lenM * .07, lenM * .155), hullMat);
-  hull.position.y = lenM * .035;
-  hull.rotation.x = 0;
+  const L = lenM;
+  const hullMat = new THREE.MeshStandardMaterial({ color: 0x46545f, metalness: .42, roughness: .55 });
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0x313e49, metalness: .35, roughness: .7 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x222b33, metalness: .5, roughness: .5 });
+  const lightMat = new THREE.MeshStandardMaterial({ color: 0x8a99a6, metalness: .7, roughness: .35 });
+
+  /* 船体：甲板轮廓挤出，尖艏方艉（不再是一块方盒子） */
+  const shp = new THREE.Shape();
+  shp.moveTo(-L * .5, 0);
+  shp.quadraticCurveTo(-L * .10, -L * .135, L * .02, -L * .13);
+  shp.quadraticCurveTo(L * .34, -L * .125, L * .5, 0);      // 艏侧
+  shp.quadraticCurveTo(L * .34, L * .125, L * .02, L * .13);
+  shp.quadraticCurveTo(-L * .10, L * .135, -L * .5, 0);     // 艉侧
+  const hg = new THREE.ExtrudeGeometry(shp, { depth: L * .34, bevelEnabled: false, curveSegments: 24 });
+  hg.rotateX(-Math.PI / 2);                                 // 挤出方向 → +Y
+  const hull = new THREE.Mesh(hg, hullMat);
+  hull.scale.set(1, .30, 1);                                // 压扁成船型（干舷高度）
+  hull.position.y = L * .045;
   g.add(hull);
-  const deckStrip = new THREE.Mesh(new THREE.BoxGeometry(lenM * .94, lenM * .008, lenM * .125),
-    new THREE.MeshStandardMaterial({ color: 0x39424f, roughness: .85 }));
-  deckStrip.position.y = lenM * .078; g.add(deckStrip);
-  const super1 = new THREE.Mesh(new THREE.BoxGeometry(lenM * .17, lenM * .09, lenM * .11), topMat);
-  super1.position.set(-lenM * .06, lenM * .13, 0); g.add(super1);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(lenM * .007, lenM * .01, lenM * .12, 10), topMat);
-  mast.position.set(-lenM * .06, lenM * .23, 0); g.add(mast);
-  const bow = new THREE.Mesh(new THREE.ConeGeometry(lenM * .078, lenM * .18, 4), hullMat);
-  bow.rotation.x = Math.PI / 2; bow.rotation.y = Math.PI / 4;
-  bow.position.set(lenM * .58, lenM * .035, 0);
-  g.add(bow);
+
+  // 甲板 + 两侧舷墙
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(L * .86, L * .012, L * .24), deckMat);
+  deck.position.y = L * .075; g.add(deck);
+  for (const s of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(L * .84, L * .018, L * .01), lightMat);
+    rail.position.set(0, L * .088, s * L * .122); g.add(rail);
+  }
+  // 上层建筑：三级舰桥 + 前向舷窗（发光）
+  const s1 = new THREE.Mesh(new THREE.BoxGeometry(L * .16, L * .07, L * .10), deckMat);
+  s1.position.set(-L * .05, L * .12, 0); g.add(s1);
+  const s2 = new THREE.Mesh(new THREE.BoxGeometry(L * .10, L * .05, L * .07), darkMat);
+  s2.position.set(-L * .04, L * .18, 0); g.add(s2);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(L * .055, L * .032, L * .05), lightMat);
+  bridge.position.set(-L * .015, L * .215, 0); g.add(bridge);
+  const win = new THREE.Mesh(new THREE.BoxGeometry(L * .003, L * .014, L * .045),
+    new THREE.MeshStandardMaterial({ color: 0x9fd8ef, emissive: 0x3a7a9a, emissiveIntensity: 1.6 }));
+  win.position.set(L * .013, L * .215, 0); g.add(win);
+  // 烟囱 + 排烟口
+  const funnel = new THREE.Mesh(new THREE.BoxGeometry(L * .05, L * .085, L * .05), darkMat);
+  funnel.position.set(L * .03, L * .15, 0); g.add(funnel);
+  const smoke = new THREE.Mesh(new THREE.CylinderGeometry(L * .022, L * .026, L * .02, 12), darkMat);
+  smoke.position.set(L * .03, L * .202, 0); g.add(smoke);
+  // 雷达桅杆 + 横梁天线 + 红白航行灯
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(L * .006, L * .009, L * .10, 8), darkMat);
+  mast.position.set(-L * .05, L * .245, 0); g.add(mast);
+  const radarBar = new THREE.Mesh(new THREE.BoxGeometry(L * .012, L * .006, L * .075), lightMat);
+  radarBar.position.set(-L * .05, L * .295, 0); g.add(radarBar);
+  const redBeacon = new THREE.Mesh(new THREE.SphereGeometry(L * .008, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xff5040, emissive: 0xff4030, emissiveIntensity: 3 }));
+  redBeacon.position.set(-L * .05, L * .345, 0); g.add(redBeacon);
+  // 舰艉直升机坪（带标识环）
+  const heli = new THREE.Mesh(new THREE.CylinderGeometry(L * .11, L * .11, L * .008, 28), darkMat);
+  heli.position.set(L * .30, L * .078, 0); g.add(heli);
+  const heliRing = new THREE.Mesh(new THREE.RingGeometry(L * .10, L * .105, 32),
+    new THREE.MeshBasicMaterial({ color: 0x7f8a94, transparent: true, opacity: .55, side: THREE.DoubleSide }));
+  heliRing.rotation.x = -Math.PI / 2; heliRing.position.set(L * .30, L * .084, 0); g.add(heliRing);
+  // 舰艏主炮（示意）
+  const gun = new THREE.Mesh(new THREE.BoxGeometry(L * .045, L * .02, L * .045), darkMat);
+  gun.position.set(L * .34, L * .088, 0); g.add(gun);
   return g;
 }

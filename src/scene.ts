@@ -203,14 +203,34 @@ export function createScene(container) {
     const fg = new THREE.BufferGeometry();
     fg.setAttribute('position', new THREE.Float32BufferAttribute(finePts, 3));
     world.add(new THREE.LineSegments(fg, fineMat));
-    // 发射台（示意斜轨）
-    const pad = new THREE.Mesh(new THREE.CylinderGeometry(14, 18, 6, 28),
-      new THREE.MeshStandardMaterial({ color: 0x1a2331, metalness: .3, roughness: .8 }));
-    pad.position.y = 3; world.add(pad);
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(3.2, 16, 1.1),
-      new THREE.MeshStandardMaterial({ color: 0x39434f, metalness: .7, roughness: .4 }));
-    rail.position.set(0, 10.4, 0); rail.rotation.z = -.19;   // ≈79° 初始射角
+    // 发射台：加高基座 + A 形发射架（中央斜轨 79°）+ 脐带塔 + 警示灯 + 地面标线
+    const padMat = new THREE.MeshStandardMaterial({ color: 0x2c3745, metalness: .3, roughness: .78 });
+    const strutMat = new THREE.MeshStandardMaterial({ color: 0x1e2731, metalness: .55, roughness: .5 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x52677c, metalness: .72, roughness: .4 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(17, 23, 7, 40), padMat);
+    base.position.y = 3.5; world.add(base);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(17, 1.6, 10, 48), strutMat);
+    rim.rotation.x = Math.PI / 2; rim.position.y = 7.4; world.add(rim);
+    // 中央斜轨（79° 射角，起飞瞬间托住弹体；起飞后被弹体遮挡不穿模）
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.4, 22, 1.4), railMat);
+    rail.position.set(0, 11, 0); rail.rotation.z = -.19;
     world.add(rail);
+    // A 形发射架支腿（在弹体两侧，不穿模）
+    for (const s of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(2, 13, 2), strutMat);
+      leg.position.set(s * 5.6, 8.5, -1.4); leg.rotation.z = s * .13;
+      world.add(leg);
+    }
+    // 脐带塔 + 红警示灯
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(2.6, 16, 2.6), strutMat);
+    tower.position.set(-8, 8, 6.5); world.add(tower);
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8),
+      new THREE.MeshStandardMaterial({ color: 0xff5040, emissive: 0xff4030, emissiveIntensity: 2.6 }));
+    beacon.position.set(-8, 16.6, 6.5); world.add(beacon);
+    // 发射台地面标线环
+    const padRing = new THREE.Mesh(new THREE.RingGeometry(20, 22, 48),
+      new THREE.MeshBasicMaterial({ color: 0xffb454, transparent: true, opacity: .35, side: THREE.DoubleSide }));
+    padRing.rotation.x = -Math.PI / 2; padRing.position.y = .15; world.add(padRing);
   }
 
   /* ---------- 相机飞行动画 ---------- */

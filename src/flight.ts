@@ -145,8 +145,17 @@ export class MissionSim {
     this.meta = {};
     this.params = {
       m0: 1680, thrust: 248e3, burnT: 7.2, mdot: 37,
-      cd: .30, area: .21, pitch0: 72, pitchEnd: 26,
+      cd: .12, area: .21, pitch0: 70, pitchEnd: 30,
       lockAt: 17.5, aimX: 27200, nMax: 12,
+      // —— 钱学森弹道 · 跳跃滑翔 ——
+      // 助推结束后不飞出大气层，而是在 8 km 上下的走廊里
+      // 做幅度衰减的正弦"跳跃滑翔"，横向持续对准目标，末段再俯冲。
+      glideAlt: 7800,       // 滑翔走廊基准高度 (m)
+      skipAmp: 2300,        // 跳跃幅度 (m) —— 让"波浪"肉眼可见
+      skipTau: 32,          // 跳跃衰减时间常数 (s)
+      skipOm: .38,          // 跳跃角频率 (rad/s) → 周期约 16.5 s
+      glideLockRange: 4200, // 水平距离进入此值后转入末段俯冲
+      glideMaxT: 52,        // 滑翔最多持续这么久
     };
   }
   /* 积分一次完整弹道 */
@@ -186,9 +195,36 @@ export class MissionSim {
       } else if (phase === 0) { phase = 1; }
 
       const acc = F.divideScalar(m);
-      // 锁定后转入比例导引扑向下落点目标
-      if (burnLeft <= 0 && t >= P.lockAt && phase === 1) phase = 2;
-      if (phase === 2) {
+      if (phase === 1) {
+        /* —— 钱学森弹道 · 跳跃滑翔 ——
+           沿一条"幅度衰减的正弦高度走廊"飞行（跳跃式滑翔，是钱学森弹道
+           最直观的特征），横向持续对准目标。纵向用 PD 把高度/爬升率钉在
+           走廊上；横向把速度方向掰向目标方位。 */
+        const tG = t - P.burnT;
+        const skipAmp = P.skipAmp * Math.exp(-tG / P.skipTau);
+        const hRef = P.glideAlt + skipAmp * Math.sin(P.skipOm * tG);
+        const hRefDot = skipAmp * P.skipOm * Math.cos(P.skipOm * tG)
+          - skipAmp / P.skipTau * Math.sin(P.skipOm * tG);
+        const gammaRef = Math.atan2(hRefDot - (pos.y - hRef) * .09, Math.max(vel.length(), 60));
+        const aim = _te.set(P.aimX, 0, 0);
+        const toAim = _tf.subVectors(aim, pos);
+        const azAim = Math.atan2(toAim.z, toAim.x);
+        const want = _tg.set(
+          Math.cos(azAim) * Math.cos(gammaRef),
+          Math.sin(gammaRef),
+          Math.sin(azAim) * Math.cos(gammaRef));
+        const corr = _ti.subVectors(want.multiplyScalar(vel.length()), vel);
+        const clamped = Math.min(P.nMax * G0, corr.length() * 1.5);
+        corr.normalize().multiplyScalar(clamped);
+        acc.add(corr);
+        // 到目标水平距离够近（或滑翔超时）→ 转入末段俯冲
+        if (Math.hypot(toAim.x, toAim.z) < P.glideLockRange || tG > P.glideMaxT) phase = 2;
+        // 滑翔段也是机动段：感受加速度 = 合加速度扣掉重力
+        const ag = _tk.copy(acc).sub(_GRAV);
+        gLoad = ag.length() / G0;
+        const vhat = _tl.copy(vel).normalize();
+        gLat = _tm.copy(ag).addScaledVector(vhat, -ag.dot(vhat)).length() / G0;
+      } else if (phase === 2) {
         const aim = _te.set(P.aimX, 4, 0);
         const rel = _tf.subVectors(aim, pos);
         const distH = Math.hypot(rel.x, rel.z);

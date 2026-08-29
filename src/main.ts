@@ -53,7 +53,7 @@ const S: any = {
   missionChartsDirty: false,
   targetMove: false,      // 目标舰是否做规避机动
   showRunning: false,     // 全流程演示进行中
-  missionCam: 'chase',    // fpv 第一人称 / chase 第三人称 / cine 电影机位 / global 全局
+  missionCam: 'cine',     // fpv 第一人称 / chase 第三人称 / cine 电影机位 / global 全局（默认电影机位）
   soundOn: true,          // 音效开关（需用户手势后才能真正出声）
 };
 
@@ -748,7 +748,7 @@ function updateGuidance(s) {
 }
 
 /* ---------- 飞行 HUD ---------- */
-const PHASE_NAMES = ['助推 BOOST', '惯性中段 MIDCOURSE', '末段导引 TERMINAL', '命中 IMPACT'];
+const PHASE_NAMES = ['助推 BOOST', '跳跃滑翔 GLIDE', '末段俯冲 TERMINAL', '命中 IMPACT'];
 function updateHud(s) {
   if (!s) return;
   const set = (id, v) => { const e = $(id); if (e) e.textContent = v; };
@@ -958,16 +958,17 @@ function enterRange(snap = true) {
   planPath.visible = true;
   trail.reset();
   S.missionEnded = false; S.mt = 0; S.missionPlaying = false;
+  resetGlobalBox();
   updatePauseBtn();
   chipLaunchIdle();
   drawPlanMeta();
-  // 进入靶场即由跟拍模块接管相机（发射前先给出待发的全局机位）
+  // 进入靶场即由跟拍模块接管相机（默认电影机位，先给一帧待发全景）
   _camSnap = true;
   viewer.setCamAuto(true);
   if (snap) {
-    S.missionCam = 'global';
+    S.missionCam = 'cine';
     syncCamButtons();
-    viewer.setCamRig(new THREE.Vector3(-5800, 6400, 11200), new THREE.Vector3(9000, 8000, 0), WORLD_UP, 42);
+    viewer.setCamRig(new THREE.Vector3(-5200, 2000, 9600), new THREE.Vector3(3200, 200, 0), WORLD_UP, 44);
   }
   flyMissile.visible = true;
   const s0 = Sm[0];
@@ -1101,8 +1102,8 @@ function missionUIOnce(s) {
   if (note) {
     note.textContent = [
       '固体火箭发动机全推力工作，程序角控制转弯。',
-      '发动机已关机，靠惯性爬升——弹道最高、阻力最小的一段。',
-      '导引头截获目标！比例导引把视线转率压向零，舵面开始大幅偏转。',
+      '助推关机！进入大气层边缘的跳跃滑翔——沿波浪走廊滑翔、逐次减速，持续修正方向。',
+      '滑翔结束，开始俯冲！导引头锁定目标，比例导引把视线转率压向零，舵面大幅偏转。',
       '近炸引信起爆，战斗部破片覆盖目标。'
     ][s.ph] || '';
   }
@@ -1196,12 +1197,13 @@ function camMissionTick(dt, s) {
   let goalFov = _camFov, resp = 4.2;
 
   if (mode === 'global') {
-    // 全局：战区尺度环绕，交代完整弹道与弹目相对位置（转快一点、压得更低更近）
-    const cx = missionSim.meta.range * 500;
-    const R = missionSim.meta.range * 300 + 2400;
-    const ang = performance.now() * .000065;
-    _camGoalPos.set(cx - Math.cos(ang) * R * .9, R * .52, Math.sin(ang) * R * .9);
-    _camGoalLook.set(cx, 4700, 0);
+    // 全局：按真实弹道范围缓慢环绕，交代完整弹道与弹目相对位置
+    _glb = _glb || computeGlobalBox();
+    const b = _glb;
+    const R = b.R * 1.6 + 700;
+    const ang = performance.now() * .00007;
+    _camGoalPos.set(b.cx - Math.cos(ang) * R * .9, b.cy + b.R * 1.45, b.cz + Math.sin(ang) * R * .9);
+    _camGoalLook.set(b.cx, b.cy, b.cz);
     _camGoalUp.copy(WORLD_UP);
     goalFov = 44; resp = 1.4;
     if (markerSprite) { markerSprite.visible = true; markerSprite.position.set(s.px, s.py + 260, s.pz); }
@@ -1252,6 +1254,25 @@ function camMissionTick(dt, s) {
    相机正好在火球内部，画面会被糊成一片黑。这里退到火球外做一个缓慢环绕，
    让爆炸完整可见，同时相机继续被驱动（否则画面会整帧冻住）。 */
 const _aftC = new THREE.Vector3();
+
+/* 全局机位：按真实弹道范围计算包围盒（含目标舰航迹），
+   环绕半径/高度都从它推出来，弹道多高多远画面就框多大，不再用魔法数字。 */
+let _glb = null;
+function computeGlobalBox() {
+  const sm = missionSim.samples;
+  if (!sm.length) return null;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const s of sm) {
+    if (s.px < x0) x0 = s.px; if (s.px > x1) x1 = s.px;
+    if (s.py < y0) y0 = s.py; if (s.py > y1) y1 = s.py;
+    if (s.pz < z0) z0 = s.pz; if (s.pz > z1) z1 = s.pz;
+  }
+  return {
+    cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, cy: (y0 + y1) / 2,
+    R: Math.max((x1 - x0) / 2, (z1 - z0) / 2, 2500),
+  };
+}
+function resetGlobalBox() { _glb = null; }
 function aftermathCam(dt) {
   impactPoint(_aftC);
   _aftC.y = Math.max(_aftC.y, 40);
@@ -1475,20 +1496,20 @@ function runFullShow() {
   // ① 装配台：先把散开的舱段合拢
   goStation('assembly', { snap: true });
   animExplore(0);
-  // ② 试车台：点火，看药柱退移与体积火焰
+  // ② 试车台：等相机飞稳再点火，让 7.2s 的燃烧完整走完，不中途切走
   showStep(() => {
     goStation('bench', { snap: true });
-    showStep(() => $('#igniteBtn').click(), 950);
-  }, 1800);
-  // ③ 靶场：发射，走完助推 → 中段 → 末段 → 命中
+    showStep(() => $('#igniteBtn').click(), 1200);
+  }, 2000);
+  // ③ 靶场：烧完（约 7.2s）后再进入，发射并走完整条钱学森弹道
   showStep(() => {
     goStation('range', { snap: true });
     showStep(() => {
       $('#launchBtn').click();
       const dur = missionSim.samples.length ? missionSim.samples[missionSim.samples.length - 1].t : 60;
       showStep(() => stopShow(), dur / S.spd * 1000 + 2600);
-    }, 1300);
-  }, 6800);
+    }, 1400);
+  }, 11200);
 }
 let exploreAnim = null;
 function animExplore(to) {
@@ -1661,6 +1682,9 @@ async function boot() {
       mam ? mam[1].split(',') : ['chase']);
   }, 1500);
   loop();
+  // 预构建靶场视觉：把"克隆整弹 + 拖尾 + 爆炸"这些重活放到加载期做掉，
+  // 避免首次进靶场或全流程演示时现场克隆导致明显卡顿。
+  try { ensureRangeVisuals(); ensureMissionVisuals(); } catch (e) { console.warn('[dap-pap] 预构建靶场视觉跳过：', e); }
 }
 
 /* ---------- 跟拍质量审计 ----------
