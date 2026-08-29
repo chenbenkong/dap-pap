@@ -826,12 +826,11 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
   const P = CAM_PRESET[mode];
   const L = missileLen(), r = missileRad();
   if (mode === 'fpv') {
-    /* 骑在弹背：机位在弹体中后段上方。
-       不能再退到喷口处——那里正对羽流，画面会被火焰糊满、只剩一个尾端。
-       视点盯住弹身前段（不再是几百米外的远处），弹体占满画面下半部，
-       既有"骑在上面"的速度感，又能看清弹身细节。 */
-    _camGoalPos.copy(_mPos).addScaledVector(fwd, -L * .35).addScaledVector(up, r * 2.4);
-    _camGoalLook.copy(_mPos).addScaledVector(fwd, L * .62);
+    /* 纯导引头视角：机位贴在弹头前端略上方，看向正前方（来袭方向）。
+       弹头尖在画面下缘、弹身完全在身后，前方海面/目标扑面而来，
+       是"骑在弹头看前方"的第一人称，不是从后面看弹身。 */
+    _camGoalPos.copy(_mPos).addScaledVector(fwd, L * .52).addScaledVector(up, r * .8);
+    _camGoalLook.copy(_mPos).addScaledVector(fwd, L * 3);
     // 末段：视线压向目标舰，让拦截过程保留在画面中央
     if (s.ph === 2 && shipMesh) {
       _toShip.copy(_sPos).sub(_mPos);
@@ -1531,10 +1530,11 @@ function tickExplode() {
   if (!decompRing) return;
   if (S.station !== 'assembly' || e <= .012) { decompRing.visible = false; return; }
   decompRing.visible = true;
-  decompRing.scale.setScalar(1.2 + e * 2.2);
-  const pulse = .6 + .4 * Math.sin(performance.now() * .004);
-  decompRing.material.opacity = Math.min(e * 1.6, .75) * pulse;
-  decompRing.rotation.z += .0022;
+  decompRing.scale.setScalar(1.15 + e * 2.0);
+  // 强度收着点、节奏放慢：半透明呼吸，不抢弹体主体
+  const pulse = .68 + .32 * Math.sin(performance.now() * .0028);
+  decompRing.material.opacity = Math.min(e * 1.2, .5) * pulse;
+  decompRing.rotation.z += .0016;
 }
 /** 任何一帧里抛异常都会让 requestAnimationFrame 断掉、整个应用永久卡死。
     这里把 rAF 排在最前面，并逐个子系统隔离，单点出错只丢该模块，画面继续跑。 */

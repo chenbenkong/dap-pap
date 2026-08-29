@@ -75,8 +75,9 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
   let camPos, look, camUp, fov;
 
   if (mode === 'fpv') {
-    camPos = add(add(mPos, mul(fwd, -L * .35)), mul(up, R * 2.4));
-    look = add(mPos, mul(fwd, L * .62));
+    // 纯导引头视角：机位在弹头前端略上方、看向正前方（弹身完全在身后）
+    camPos = add(add(mPos, mul(fwd, L * .52)), mul(up, R * .8));
+    look = add(mPos, mul(fwd, L * 3));
     if (s.ph === 2 && shipPos) {
       const toShip = norm(sub(shipPos, mPos));
       const ld = norm(add(mul(toShip, .65), mul(fwd, .35)));
@@ -143,7 +144,7 @@ const TIMES = [0.5, 3, 8, 15, 25, 40, 55, dur * 0.8, dur - 0.2];
 head(`跟拍机位审计（弹长 ${L.toFixed(1)} m · 任务时长 ${dur.toFixed(1)} s · 画面 16:9）`);
 console.log('  模式     t(s)   距弹(m)  画面占比  视线夹角  在画面内  离地(m)');
 
-const bad = { inFrame: [], endOn: [], tooFar: [], underGround: [], tooSmall: [] };
+const bad = { inFrame: [], endOn: [], tooFar: [], underGround: [], tooSmall: [], fpvLook: [] };
 
 for (const mode of MODES) {
   for (const t of TIMES) {
@@ -159,19 +160,22 @@ for (const mode of MODES) {
     const pn = project(nose, camPos, look, camUp, fov);
     const pt = project(tail, camPos, look, camUp, fov);
 
-    // 中心是否在画面内
+    // 中心是否在画面内（fpv 是导引头视角，弹身本就在身后，不参与此判定）
     const inFrame = pc.depth > 0 && Math.abs(pc.x) <= 1 && Math.abs(pc.y) <= 1;
     // 弹体投影长度占画面高度的比例（NDC 纵跨 2 = 整屏）
     const span = Math.hypot(pn.x - pt.x, pn.y - pt.y) / 2;
     // 视线与弹轴夹角：越接近 0 越"正对弹尾"（只能看见尾部一个圆面）
     const viewDir = norm(sub(look, camPos));
     const endOnCos = Math.abs(dot(viewDir, fwd));
+    // fpv：视线应朝弹轴前方（机头朝前看），而不是看到弹身
+    const fwdCos = dot(viewDir, fwd);
 
-    if (!inFrame) bad.inFrame.push(`${mode}@${t.toFixed(1)}s`);
+    if (mode !== 'fpv' && !inFrame) bad.inFrame.push(`${mode}@${t.toFixed(1)}s`);
     if (mode !== 'fpv' && endOnCos > 0.92) bad.endOn.push(`${mode}@${t.toFixed(1)}s endOnCos=${endOnCos.toFixed(3)}`);
     if (mode !== 'fpv' && dist > 260) bad.tooFar.push(`${mode}@${t.toFixed(1)}s ${dist.toFixed(0)}m`);
     if (camPos.y < 5) bad.underGround.push(`${mode}@${t.toFixed(1)}s y=${camPos.y.toFixed(1)}`);
     if (mode !== 'fpv' && span < 0.25) bad.tooSmall.push(`${mode}@${t.toFixed(1)}s 仅占 ${(span * 100).toFixed(0)}%`);
+    if (mode === 'fpv' && fwdCos < .9) bad.fpvLook.push(`${mode}@${t.toFixed(1)}s cos=${fwdCos.toFixed(3)}`);
 
     console.log(`  ${mode.padEnd(6)} ${String(t.toFixed(1)).padStart(6)}  ${dist.toFixed(0).padStart(7)}  `
       + `${(span * 100).toFixed(0).padStart(7)}%  ${(Math.acos(endOnCos) * 180 / Math.PI).toFixed(0).padStart(7)}°  `
@@ -180,11 +184,12 @@ for (const mode of MODES) {
 }
 
 head('判定');
-ok(bad.inFrame.length === 0, '全弹道弹体中心始终在画面内', bad.inFrame.join(', '));
+ok(bad.inFrame.length === 0, '全弹道弹体中心始终在画面内（fpv 导引头视角除外）', bad.inFrame.join(', '));
 ok(bad.endOn.length === 0, '跟拍机位不正对弹尾（能看见弹体侧影而非尾部圆面）', bad.endOn.slice(0, 3).join(', '));
 ok(bad.tooFar.length === 0, '跟拍距离在特写量级（< 260 m，不会被甩开）', bad.tooFar.slice(0, 3).join(', '));
 ok(bad.underGround.length === 0, '相机全程不钻地', bad.underGround.slice(0, 3).join(', '));
 ok(bad.tooSmall.length === 0, '弹体在画面中占比 ≥ 25%（是特写而不是小点）', bad.tooSmall.slice(0, 3).join(', '));
+ok(bad.fpvLook.length === 0, '第一人称是"机头朝前看"的导引头视角（视线沿弹轴前方）', bad.fpvLook.slice(0, 3).join(', '));
 
 console.log(`\n结果  ${pass} 通过  ${fail} 失败\n`);
 process.exit(fail ? 1 : 0);

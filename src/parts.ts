@@ -740,6 +740,7 @@ export function buildMissile() {
   /* ====== P6 固体发动机（壳体 + 星型药柱 + 点火器）====== */
   const gMotor = new THREE.Group(); gMotor.name = 'motor';
   let grainMesh = null;
+  let grainFrames: any[] = [];   // 预烘焙的退移关键帧（供 disposeAll 释放）
   {
     // 壳体（含船尾收锥）
     const shell = skinLathe([
@@ -764,12 +765,20 @@ export function buildMissile() {
       return geo;
     }
     const R_TIP0 = .17;
-    grainMesh = new THREE.Mesh(grainGeo(.08, R_TIP0), mats.grain);
+    /* 退移几何预烘焙成 24 档关键帧，燃烧时只做"换几何"、不再每帧重建——
+       这是"点火会卡住"的根治：旧实现每帧 dispose + 重建 ExtrudeGeometry，
+       7 秒内制造上百份几何垃圾，GC 一抖就卡；预烘焙后零重建、零垃圾。 */
+    const BURN_FRAMES = 24;
+    grainFrames.length = 0;
+    for (let bi = 0; bi <= BURN_FRAMES; bi++) {
+      const fr = bi / BURN_FRAMES;
+      grainFrames.push(grainGeo(.08 + fr * (R_TIP0 - .015 - .08), R_TIP0));
+    }
+    grainMesh = new THREE.Mesh(grainFrames[0], mats.grain);
     grainMesh.position.y = -.95; gMotor.add(grainMesh);
-    gMotor.userData.updateBurn = function (frac) {  // frac 0..1
-      const rv = .08 + frac * (R_TIP0 - .015 - .08);
-      grainMesh.geometry.dispose();
-      grainMesh.geometry = grainGeo(rv, R_TIP0);
+    gMotor.userData.updateBurn = function (frac) {  // frac 0..1 → 就近档位直接换
+      const idx = Math.round(THREE.MathUtils.clamp(frac, 0, 1) * BURN_FRAMES);
+      if (grainMesh.geometry !== grainFrames[idx]) grainMesh.geometry = grainFrames[idx];
     };
     // 点火器
     const igniter = new THREE.Mesh(new THREE.CylinderGeometry(.03, .035, .3, 16), mats.steelDark);
@@ -1013,7 +1022,7 @@ export function buildMissile() {
     shellMats: usedMats.filter(m => m.name === 'paint' || m.name === 'radome' || m.name === 'fin'),
     allMats: usedMats,
 
-    disposeAll() { root.traverse(o => { const m = o as any; if (m.geometry) m.geometry.dispose(); }); },
+    disposeAll() { root.traverse(o => { const m = o as any; if (m.geometry) m.geometry.dispose(); }); grainFrames.forEach(g => g.dispose()); },
   };
 
   api.setExplode(0);
