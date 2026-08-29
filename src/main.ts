@@ -7,6 +7,23 @@ import { createScene } from './scene';
 import { buildMissile } from './parts';
 import { Plume, Trail, Boom, buildShip } from './effects';
 import { MissionSim, predictedIntercept } from './flight';
+import { sfx } from './audio';
+
+/* ---------- 音效解锁 ----------
+   浏览器策略：AudioContext 必须由真实用户手势启动。
+   挂一次性监听，任何首次交互都尝试解锁；解锁后自动摘除监听。 */
+let _sfxArmed = false;
+function armAudioOnce() {
+  if (_sfxArmed) return;
+  _sfxArmed = true;
+  sfx.unlock();
+  removeEventListener('pointerdown', armAudioOnce);
+  removeEventListener('keydown', armAudioOnce);
+  removeEventListener('touchstart', armAudioOnce);
+}
+addEventListener('pointerdown', armAudioOnce);
+addEventListener('keydown', armAudioOnce);
+addEventListener('touchstart', armAudioOnce);
 
 /** 取单个元素（本教具大量直接访问 DOM 属性，统一放宽为 any） */
 const $ = (s: string): any => document.querySelector(s);
@@ -36,7 +53,18 @@ const S: any = {
   missionChartsDirty: false,
   targetMove: false,      // 目标舰是否做规避机动
   showRunning: false,     // 全流程演示进行中
+  missionCam: 'chase',    // fpv 第一人称 / chase 第三人称 / cine 电影机位 / global 全局
+  soundOn: true,          // 音效开关（需用户手势后才能真正出声）
 };
+
+/* ============================================================
+   飞行世界的尺度约定
+   真实弹长约 5.9 m，直接放进 27 km 的靶场里会小成一个点——
+   跟拍时弹体只占画面 8%，根本看不清。教学可视化允许适度夸张：
+   弹体在飞行世界放大 2.6×，相机距离同步放大，比例观感不变
+   但本体细节清晰可见。装配台/试车台不受影响（真实比例）。
+   ============================================================ */
+const MISSILE_WORLD_SCALE = 4.0;
 
 /* ============================================================ */
 /*                   场景与模型装配                               */
@@ -262,14 +290,15 @@ const STATIONS: any = {
   assembly: {
     idx: 0, cn: '装配台', en: 'ASSEMBLY',
     goal: '拖动爆炸滑杆把这枚导弹拆开，或直接点击任意部件查看它的档案。',
-    cam: [5.8, 1.5, 11.4], tgt: [0, .15, 0],
-    hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件查看详情',
+    // 机位刻意贴近：让弹体撑满画面，细节（蒙皮、铆钉、喷印）才看得见
+    cam: [4.4, 1.1, 8.6], tgt: [0, .15, 0],
+    hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件 → 自动飞到特写',
   },
   bench: {
     idx: 1, cn: '试车台', en: 'TEST BENCH',
     goal: '点火试车：看星型药柱退移、推力曲线，以及喷管里喷出的高温燃气。',
-    cam: [3.6, -2.9, 7.8], tgt: [0, -3.3, 0],
-    hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件查看详情',
+    cam: [2.8, -2.5, 6.2], tgt: [0, -3.3, 0],
+    hintDrag: '拖动旋转 · 滚轮缩放', hintClick: '点击部件 → 自动飞到特写',
   },
   range: {
     idx: 2, cn: '靶场', en: 'RANGE',
@@ -311,16 +340,27 @@ function goStation(key, opts: any = {}) {
     setPanelTab('tele', '飞行遥测 · 全任务');
   } else {
     viewer.setWorldMode(false);
-    const ec = key === 'assembly' ? S.explore * .5 : 0;
-    viewer.flyCam(
-      [C.cam[0] * (S.spinOn ? -1 : 1), HANGAR_Y + C.cam[1] + ec, C.cam[2]],
-      [C.tgt[0], HANGAR_Y + C.tgt[1] + S.explore * 1.2, C.tgt[2]]);
+    updateStationCam(changed ? 1.05 : .55);
     setPanelTab('parts', key === 'assembly' ? '部件档案 · 整弹视图' : '部件档案 · 试车台');
   }
 
   $('#panelRail') && ($('#panelRail').style.display = '');
   updateHudVisibility();
   try { localStorage.setItem('mlab_st', key); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+/* ---------- 装配台 / 试车台机位：随爆炸度自动后退 ----------
+   拆得越开，部件散得越远。若相机不动，散开的舱段会飞出画幅——
+   这里按爆炸度沿视线方向整体后撤，保证任何时候整弹都在画面里。   */
+function updateStationCam(dur = .55) {
+  if (S.station === 'range') return;
+  const C = STATIONS[S.station];
+  const zoom = 1 + (S.station === 'assembly' ? S.explore * 1.05 : 0);
+  const spin = S.spinOn ? -1 : 1;
+  viewer.flyCam(
+    [C.cam[0] * spin * zoom, HANGAR_Y + C.cam[1] * zoom, C.cam[2] * zoom],
+    [C.tgt[0], HANGAR_Y + C.tgt[1] + (S.station === 'assembly' ? S.explore * .55 : 0), C.tgt[2]],
+    dur);
 }
 
 /* HUD 只在靶场工位、且任务已经开始后显示 */
@@ -347,6 +387,30 @@ function stopAllSims() {
   // 靶场：暂停任务播放
   S.missionPlaying = false;
   updatePauseBtn();
+  // 离开靶场必须把相机交还轨道控制，否则跟拍模块会一直锁死视角
+  if (S.station !== 'range') viewer && viewer.setCamAuto(false);
+}
+
+/* ============================================================
+   只按"可见的实体网格"求包围盒。
+   不能用 Box3.setFromObject：羽流的火花粒子在未激活时停在 y=9999 做隐藏位，
+   会被一起算进去，包围盒被撑到上万米——点击部件算特写距离时，
+   相机会被甩到几公里外，聚焦功能等于失效。
+   ============================================================ */
+const _tmpBox = new THREE.Box3();
+function boxOfMeshes(obj) {
+  const box = new THREE.Box3();
+  box.makeEmpty();
+  obj.updateMatrixWorld(true);
+  obj.traverse(o => {
+    if (!o.isMesh || !o.visible || !o.geometry) return;
+    const pos = o.geometry.attributes && o.geometry.attributes.position;
+    if (!pos) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    _tmpBox.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+    box.union(_tmpBox);
+  });
+  return box;
 }
 
 /* ============================================================ */
@@ -395,10 +459,16 @@ function selectPart(key, { fly = false } = {}) {
   grp.traverse(o => { if (o.isMesh && o.material) mats.add(o.material); });
   mats.forEach(m => { m.emissive = m.emissive || new THREE.Color(0); m.emissive.setHex(0xffb454); });
   if (fly) {
+    // 特写距离按部件实际尺寸自适应：小件（引信环）贴近看细节，
+    // 大件（发动机）拉开看全貌，一律用固定 3.1 会让小件显得很远、大件塞满画面。
     const wp = new THREE.Vector3(); p.anchor.getWorldPosition(wp);
+    const box = boxOfMeshes(grp);
+    const sph = box.getBoundingSphere(new THREE.Sphere());
+    const dist = Math.max(sph.radius * 2.5, 1.35);
     const dir = viewer.camera.position.clone().sub(wp).normalize();
-    const np = wp.clone().addScaledVector(dir, 3.1).add(new THREE.Vector3(0, .5, 0));
+    const np = wp.clone().addScaledVector(dir, dist);
     viewer.flyCam([np.x, np.y, np.z], [wp.x, wp.y, wp.z], .9);
+    sfx.select();
   }
   clearTimeout(window.__hlTO);
   window.__hlTO = setTimeout(() => {
@@ -432,6 +502,7 @@ function setupBurnUI() {
     $('#igniteBtn').classList.add('armed');
     setTimeout(() => $('#igniteBtn').classList.remove('armed'), 1300);
     chip($('#motorChip'), '燃烧 BURNING', 'burn');
+    sfx.ignition();
   });
   $('#burnSlider').addEventListener('input', e => {
     const v = +e.target.value / 100;
@@ -442,6 +513,8 @@ function setupBurnUI() {
       plumeHangar.setPower(prof > 0.02 ? Math.max(prof, .18) : 0);
       updateThrustReadout(prof);
       syncRangeFill(e.target);
+      // 手动拖燃面滑杆也给出推力声，拖到 0 时熄火
+      if (prof > 0.02) sfx.rocketOn(Math.max(prof, .25)); else sfx.rocketOff();
     }
   });
 }
@@ -459,6 +532,8 @@ function tickBurn(dt) {
   if (throatMat) { throatMat.emissive.setHex(0xff5a1e); throatMat.emissiveIntensity = prof * 1.5; }
   // 读数
   updateThrustReadout(prof);
+  // 试车轰鸣：跟着推力曲线走，推力掉了声音也跟着弱下去
+  if (f < 1) sfx.rocketOn(Math.max(prof, .18));
   // 曲线历史
   S.burnChart.push(f);
   const sl = $('#burnSlider'); sl.value = f * 100; syncRangeFill(sl);
@@ -467,6 +542,7 @@ function tickBurn(dt) {
     $('#igniteBtn').textContent = '再烧一遍';
     chip($('#motorChip'), '燃尽 BURNOUT', 'fly');
     plumeHangar.setPower(0);
+    sfx.rocketOff();
   }
 }
 let _thrustPeak = 206;   // kN 显示基数
@@ -501,10 +577,13 @@ function ensureRangeVisuals() {
   }
   if (!flyMissile) {
     flyMissile = M.root.clone(true);
-    flyMissile.scale.setScalar(1);
+    // 真实弹长约 5.9 m，放进 27 km 的靶场里跟拍时只占画面 8%，
+    // 细节全糊掉。这里按教学可视化需要放大 2.6×（比例观感不变，本体看得清）。
+    flyMissile.scale.setScalar(MISSILE_WORLD_SCALE);
     viewer.world.add(flyMissile);
     plumeWorld = new Plume(findNozzleTip(flyMissile));
-    plumeWorld.scale = 26;         // 世界米尺度
+    plumeWorld.scale = MISSILE_WORLD_SCALE;   // 羽流随机体同步放大
+    plumeWorld.setDistance(MISSILE_WORLD_SCALE);
   }
 }
 function findNozzleTip(rootObj) {
@@ -644,16 +723,103 @@ function findFinDirs(clonedRoot) {
   if (finGrp) out = finGrp.children.filter(o => o.isGroup);
   return out;
 }
-function camChase(target, vel, dt, aim) {
-  // aim 给定时: 相机挂在弹后略高, 镜头看向“弹前方→目标”方向, 目标始终入画
-  const dir = _cvtmp(aim ? _tv2.copy(aim).sub(target) : vel).clone();
-  _cv.copy(dir).multiplyScalar(-50).add(target);
-  _cv.y += 13;
-  const k = 1 - Math.exp(-dt * 2.4);
-  viewer.camera.position.lerp(_cv, k);
-  _tv.copy(target).addScaledVector(dir, 44);
-  viewer.controls.target.lerp(_tv, k * 1.15);
+/* ============================================================
+   飞行跟拍机位
+   四种视角，全部由本模块直接驱动相机（已绕开 OrbitControls）：
+     fpv    第一人称：骑在弹背上，视野随速度张开
+     chase  第三人称：挂在水平后上方，弹体占画面约 1/4
+     cine   电影机位：侧后方缓慢环绕，交代弹目关系
+     global 全局视角：拉到战区尺度看完整弹道
+   关键修正：旧实现沿“-速度方向”偏移，发射时弹道接近垂直（程序角 72°），
+   相机会被甩到地面以下（y ≈ -52 m），于是“发射后看不到导弹”。
+   现在统一改用「水平后方向 + 世界上方」偏移，并给相机地面高度兜底。
+   ============================================================ */
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const CAM_PRESET: any = {
+  fpv:   { dist: 0,  hgt: 0,  ahead: 420, fov: 72, resp: 9.0, label: '第一人称' },
+  chase: { dist: 55, hgt: 15, ahead: 34,  fov: 42, resp: 4.2, label: '第三人称' },
+  cine:  { dist: 96, hgt: 32, ahead: 50,  fov: 38, resp: 2.6, label: '电影机位' },
+};
+const _camGoalPos = new THREE.Vector3(), _camGoalLook = new THREE.Vector3();
+const _camNowPos = new THREE.Vector3(), _camNowLook = new THREE.Vector3();
+const _camNowUp = new THREE.Vector3(0, 1, 0), _camGoalUp = new THREE.Vector3(0, 1, 0);
+let _camFov = 46, _camSnap = true;
+const _vhat = new THREE.Vector3(), _horiz = new THREE.Vector3();
+const _cRight = new THREE.Vector3(), _cUp = new THREE.Vector3();
+const _toShip = new THREE.Vector3(), _lookDir = new THREE.Vector3(), _fwdFlat = new THREE.Vector3();
+
+/** 由速度方向构造稳定的正交基（前向/右向/上向），垂直爬升时自动退化处理 */
+function basisFromVel(vel, outFwd, outRight, outUp) {
+  const spd = vel.length();
+  if (spd < 1e-3) outFwd.set(0, 1, 0); else outFwd.copy(vel).divideScalar(spd);
+  outRight.crossVectors(outFwd, WORLD_UP);
+  if (outRight.lengthSq() < 1e-6) outRight.set(1, 0, 0);   // 垂直向上/向下飞行
+  outRight.normalize();
+  outUp.crossVectors(outRight, outFwd).normalize();
+  return spd;
 }
+
+/** 计算某一模式在当前时刻的理想机位，写入 _camGoalPos / _camGoalLook / _camGoalUp，返回目标 FOV */
+function calcCamGoal(mode, s, spd, fwd, right, up) {
+  const P = CAM_PRESET[mode];
+  if (mode === 'fpv') {
+    // 相机贴在弹背 slightly 后方，弹体前段与弹翼入画，正前方是来袭方向
+    _camGoalPos.copy(_mPos).addScaledVector(fwd, -3.2 * MISSILE_WORLD_SCALE).addScaledVector(up, 2.1 * MISSILE_WORLD_SCALE);
+    _camGoalLook.copy(_mPos).addScaledVector(fwd, P.ahead);
+    // 末段：视线压向目标舰，让拦截过程保留在画面中央
+    if (s.ph === 2 && shipMesh) {
+      _toShip.copy(_sPos).sub(_mPos);
+      if (_toShip.lengthSq() > 1) {
+        _lookDir.copy(_toShip).normalize().lerp(fwd, .35).normalize();
+        _camGoalLook.copy(_mPos).addScaledVector(_lookDir, P.ahead);
+      }
+    }
+    _camGoalUp.copy(up);
+    return P.fov + clamp(spd / 1020, 0, 1) * 20;           // 速度越快视野越广，增强速度感
+  }
+  if (mode === 'chase' || mode === 'cine') {
+    // 水平后方向：把速度投影到水平面再取反，避免大俯仰角把相机甩到地下
+    _horiz.set(-fwd.x, 0, -fwd.z);
+    if (_horiz.lengthSq() < 1e-6) _horiz.set(0, 0, -1);
+    _horiz.normalize();
+    let dist = P.dist, hgt = P.hgt;
+    if (mode === 'cine') {
+      // 侧后方缓慢环绕
+      const ang = Math.sin(performance.now() * .00016) * .85;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const hx = _horiz.x, hz = _horiz.z;
+      _horiz.set(hx * ca - hz * sa, 0, hx * sa + hz * ca);
+      dist *= 1.35; hgt *= 1.9;
+    }
+    // 速度越快镜头拉越远，保持弹体在画面中的占比稳定
+    dist *= 1 + clamp(spd / 1100, 0, 1) * .55;
+    _camGoalPos.copy(_mPos).addScaledVector(_horiz, dist).addScaledVector(WORLD_UP, hgt);
+    _camGoalPos.y = Math.max(_camGoalPos.y, 12);           // 地面兜底，杜绝钻地
+
+    // 视线锚点：沿「水平前方」引导，再略微上抬，让弹体落在画面中心偏下、
+    // 前方留出空间。这里不能用 3D 速度方向前移——助推段速度上仰 60°~70°，
+    // 前方几十米处会远高于弹体，相机随之仰头，弹体被压到画面下缘之外
+    // （实测夹角 22.4° > 垂直半视角 21°，导弹整个掉出视野）。
+    _fwdFlat.set(fwd.x, 0, fwd.z);
+    if (_fwdFlat.lengthSq() < 1e-6) _fwdFlat.set(0, 0, 1); else _fwdFlat.normalize();
+    _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, P.ahead).addScaledVector(WORLD_UP, dist * .09);
+    // 末段：视线偏向目标舰，弹与目标同框（同样取水平投影，避免俯冲时视线砸向海面）
+    if (s.ph === 2 && shipMesh) {
+      _toShip.copy(_sPos).sub(_mPos);
+      if (_toShip.lengthSq() > 1) {
+        _lookDir.set(_toShip.x, 0, _toShip.z);
+        if (_lookDir.lengthSq() < 1e-6) _lookDir.copy(_fwdFlat); else _lookDir.normalize();
+        _lookDir.lerp(_fwdFlat, .45).normalize();
+        _camGoalLook.copy(_mPos).addScaledVector(_lookDir, P.ahead * 1.3).addScaledVector(WORLD_UP, dist * .09);
+      }
+    }
+    _camGoalUp.copy(WORLD_UP);
+    void right;
+    return P.fov;
+  }
+  return _camFov;
+}
+
 function _cvtmp(v) { return _lerpDir.copy(v).normalize(); }
 const _lerpDir = new THREE.Vector3();
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
@@ -724,7 +890,14 @@ function enterRange(snap = true) {
   updatePauseBtn();
   chipLaunchIdle();
   drawPlanMeta();
-  if (snap) viewer.snapView([-5800, 6400, 11200], [9000, 8000, 0]);
+  // 进入靶场即由跟拍模块接管相机（发射前先给出待发的全局机位）
+  _camSnap = true;
+  viewer.setCamAuto(true);
+  if (snap) {
+    S.missionCam = 'global';
+    syncCamButtons();
+    viewer.setCamRig(new THREE.Vector3(-5800, 6400, 11200), new THREE.Vector3(9000, 8000, 0), WORLD_UP, 42);
+  }
   flyMissile.visible = true;
   const s0 = Sm[0];
   flyMissile.position.set(s0.px, s0.py, s0.pz);
@@ -862,6 +1035,20 @@ function missionUIOnce(s) {
     ][s.ph] || '';
   }
 }
+/* ---------- 飞行音效 ----------
+   助推段给火箭轰鸣，全程按马赫数给破空风噪；
+   突破音障与末段锁定各只触发一次（时间轴回拖后允许再次触发）。 */
+let _sfxBoomed = false, _sfxLocked = false;
+function updateMissionSound(s) {
+  if (!s) return;
+  if (s.ph === 0) sfx.rocketOn(.5 + .5 * Math.min(s.t / 3, 1));
+  else sfx.rocketOff();
+  sfx.windOn(s.mach);
+  if (!_sfxBoomed && s.mach >= 1.0) { _sfxBoomed = true; sfx.sonicBoom(); }
+  if (s.mach < .9) _sfxBoomed = false;
+  if (!_sfxLocked && s.ph === 2) { _sfxLocked = true; sfx.lock(); }
+  if (s.ph < 2) _sfxLocked = false;
+}
 let _pnTick = 0;
 function tickRange(dt) {
   if (S.station !== 'range' || !S.missionPlaying || S.missionEnded) return;
@@ -875,7 +1062,11 @@ function tickRange(dt) {
     // 命中：在目标舰处起爆
     impactPoint(_impV);
     boom.fire(new THREE.Vector3(_impV.x, 16, _impV.z), 130);
-    viewer.shakeAt(.32);
+    // 震动按世界尺度给（米制，几十米外才看得出）
+    viewer.shakeAt(14);
+    sfx.rocketOff(); sfx.windOff();
+    sfx.explosion(1.15);
+    _sfxBoomed = false; _sfxLocked = false;
     if (losLine) losLine.visible = false;
     if (predictRing) predictRing.visible = false;
   }
@@ -889,6 +1080,7 @@ function tickRange(dt) {
   }
   plumeWorld.setPower(s.ph === 0 ? .88 : 0);
   if (trail) trail.push(s.px, s.py, s.pz, s.v);
+  updateMissionSound(s);
   // 目标舰随任务时间推进
   if (shipMesh) {
     shipPosAt(S.mt, _sPos);
@@ -905,39 +1097,46 @@ function tickRange(dt) {
 }
 function nxtSafe(s) { const n = missionSim.sampleAt(s.t + missionSim.dt * 6); return n && n !== s ? n : s; }
 const _pv2 = new THREE.Vector3(), _pv3 = new THREE.Vector3(), _pv4 = new THREE.Vector3();
-let curMissionCam = 'follow';
 let _camAnchor = new THREE.Vector3(9000, 400, 2600);
 function camMissionTick(dt, s) {
-  const k = 1 - Math.exp(-dt * (curMissionCam === 'follow' ? 2.4 : 1.4));
-  // 末段导引：跟弹视角自动升级为“末端特写”——挂在弹后、镜头死死咬住目标舰
-  if (curMissionCam === 'follow' && s.ph === 2 && shipMesh) {
-    missionVelAt(s.t, _mVel);
-    camChase(_mPos.set(s.px, s.py, s.pz), _mVel, dt, _sPos);
-    markerSprite && (markerSprite.visible = false);
-    planPath && (planPath.visible = false);
-    return;
-  }
-  if (curMissionCam === 'follow') {
-    const ahead = nxtSafe(s);
-    _cv.set(ahead.px - s.px, ahead.py - s.py, ahead.pz - s.pz).normalize();
-    const back = _tv.copy(_cv).multiplyScalar(-95).add(new THREE.Vector3(s.px, s.py, s.pz));
-    back.y += 34;
-    viewer.camera.position.lerp(back, k);
-    _camAnchor.lerp(new THREE.Vector3(s.px, s.py, s.pz), k * 1.3);
-    viewer.controls.target.copy(_camAnchor);
-    markerSprite.visible = false;
-    planPath && (planPath.visible = false);
-  } else {
-    // 全局: 缓慢环绕重心
+  if (!flyMissile) return;
+  missionVelAt(s.t, _mVel);
+  _mPos.set(s.px, s.py, s.pz);
+  const mode = S.missionCam;
+  const spd = basisFromVel(_mVel, _vhat, _cRight, _cUp);
+  let goalFov = _camFov, resp = 4.2;
+
+  if (mode === 'global') {
+    // 全局：战区尺度缓慢环绕，交代完整弹道与弹目相对位置
     const cx = missionSim.meta.range * 500;
     const R = missionSim.meta.range * 340 + 3200;
     const ang = performance.now() * .00004;
-    viewer.camera.position.lerp(new THREE.Vector3(cx - Math.cos(ang) * R * .9, R * .58, Math.sin(ang) * R * .9), k * .5);
-    viewer.controls.target.lerp(new THREE.Vector3(cx, 5200, 0), k * .6);
-    markerSprite.visible = true;
-    markerSprite.position.set(s.px, s.py + 140, s.pz);
-    planPath && (planPath.visible = true);
+    _camGoalPos.set(cx - Math.cos(ang) * R * .9, R * .58, Math.sin(ang) * R * .9);
+    _camGoalLook.set(cx, 5200, 0);
+    _camGoalUp.copy(WORLD_UP);
+    goalFov = 42; resp = 1.4;
+    if (markerSprite) { markerSprite.visible = true; markerSprite.position.set(s.px, s.py + 260, s.pz); }
+    if (planPath) planPath.visible = true;
+  } else {
+    goalFov = calcCamGoal(mode, s, spd, _vhat, _cRight, _cUp);
+    resp = CAM_PRESET[mode].resp;
+    if (markerSprite) markerSprite.visible = false;
+    // 电影机位保留计划弹道做空间参照，跟拍/第一人称时隐藏以免挡视线
+    if (planPath) planPath.visible = (mode === 'cine');
   }
+
+  // 平滑：切视角时瞬移（否则从全局 lerp 到弹背会穿过整片地形）
+  if (_camSnap) {
+    _camNowPos.copy(_camGoalPos); _camNowLook.copy(_camGoalLook);
+    _camNowUp.copy(_camGoalUp); _camFov = goalFov; _camSnap = false;
+  } else {
+    const k = 1 - Math.exp(-dt * resp);
+    _camNowPos.lerp(_camGoalPos, k);
+    _camNowLook.lerp(_camGoalLook, Math.min(1, k * 1.35));
+    _camNowUp.lerp(_camGoalUp, k).normalize();
+    _camFov += (goalFov - _camFov) * k;
+  }
+  viewer.setCamRig(_camNowPos, _camNowLook, _camNowUp, _camFov);
 }
 
 /* ============================================================ */
@@ -948,6 +1147,35 @@ function syncRangeFill(inp) {
   inp.style.setProperty('--fill', pct + '%');
 }
 
+/* ---------- 机位切换 ---------- */
+const CAM_HINT: any = {
+  fpv: '第一人称：骑在弹背上，视野随速度张开，末段视线压向目标舰',
+  chase: '第三人称：弹后跟拍，弹体占画面约一半',
+  cine: '电影机位：侧后方缓慢环绕，看清扫全貌与弹目关系',
+  global: '全局：战区尺度俯瞰完整弹道，菱形光标标出导弹位置',
+  free: '自由：交还鼠标，可自由环绕观察（拖动旋转 / 滚轮缩放）',
+};
+function setMissionCam(mode) {
+  if (!CAM_HINT[mode]) mode = 'chase';
+  S.missionCam = mode;
+  syncCamButtons();
+  _camSnap = true;                                   // 跨尺度切换直接瞬移，避免镜头穿地飞行
+  viewer.setCamAuto(mode !== 'free');
+  if (mode === 'free') {
+    // 交还轨道相机前先把 FOV 拉回常值（跟拍时可能被速度感拉到 80°+）
+    viewer.camera.fov = 42; viewer.camera.updateProjectionMatrix();
+  } else if (S.station === 'range') {
+    const s = missionSim.sampleAt(S.mt) || missionSim.samples[0];
+    if (s) camMissionTick(0, s);
+  }
+  sfx.whoosh(true);
+}
+function syncCamButtons() {
+  $$('#camGroup .cam-btn').forEach(b => b.classList.toggle('on', b.dataset.cam === S.missionCam));
+  const hint = $('#camHint');
+  if (hint) hint.textContent = CAM_HINT[S.missionCam] || '';
+}
+
 function bindUI() {
   // 爆炸滑杆
   const ex = $('#explodeSlider');
@@ -956,6 +1184,7 @@ function bindUI() {
     M.setExplode(S.explore);
     $('#explodeVal').textContent = ex.value + '%';
     syncRangeFill(ex);
+    updateStationCam(.12);      // 拆得越开相机同步后撤，部件不会飞出画幅
   });
   syncRangeFill(ex);
 
@@ -1016,16 +1245,23 @@ function bindUI() {
     $$('.spd-btn').forEach(x => x.classList.remove('on'));
     b.classList.add('on'); S.spd = +b.dataset.spd;
   }));
-  $$('[data-cam]').forEach(b => b.addEventListener('click', () => {
-    $$('[data-cam]').forEach(x => x.classList.remove('on'));
-    b.classList.add('on'); curMissionCam = b.dataset.cam;
-    if (curMissionCam === 'globalView') {
-      viewer.flyCam([-3600, 11000, 17500], [missionSim.meta.range * 500, 5500, 0], 1.4);
-    } else {
-      viewer.flyCam(null, null);
-    }
+  $$('#camGroup .cam-btn').forEach(b => b.addEventListener('click', () => {
+    setMissionCam(b.dataset.cam);
+    sfx.click();
   }));
-  $('#missionReset').addEventListener('click', () => { stopShow(); enterRange(true); });
+  $('#missionReset').addEventListener('click', () => {
+    stopShow(); enterRange(true);
+    sfx.rocketOff(); sfx.windOff(); sfx.whoosh(false);
+  });
+
+  // 音效开关
+  $('#sndBtn').addEventListener('click', function () {
+    S.soundOn = !S.soundOn;
+    sfx.setEnabled(S.soundOn);
+    this.classList.toggle('on', S.soundOn);
+    $('#sndLabel').textContent = S.soundOn ? '音效' : '静音';
+    if (S.soundOn) { armAudioOnce(); sfx.select(); }
+  });
 
   // 面板开合
   $('#panelClose').addEventListener('click', () => {
@@ -1212,11 +1448,116 @@ async function boot() {
     const [p, t] = mv[1].split('|').map(s => s.split(',').map(Number));
     if (p && p.length === 3) viewer.snapView(p, t || [0, 0, 0]);
   }
+  // 定格状态深链：直接把实验台摆成某个姿势，便于课件嵌入与截图
+  const me = location.hash.match(/explode=(\d+)/);
+  if (me) setTimeout(() => {
+    const v = Math.max(0, Math.min(100, +me[1]));
+    const sl = $('#explodeSlider');
+    sl.value = v; S.explore = v / 100;
+    M.setExplode(S.explore); $('#explodeVal').textContent = v + '%';
+    syncRangeFill(sl); updateStationCam(.01);
+  }, 900);
+  const mk = location.hash.match(/cam=(fpv|chase|cine|global|free)/);
+  if (mk) setTimeout(() => { if (S.station !== 'range') goStation('range'); setMissionCam(mk[1]); }, 1000);
+  // 任务定格：跳到指定时刻并摆好机位（无头环境无法等动画，用它取中间帧）
+  const mt2 = location.hash.match(/mt=([\d.]+)/);
+  if (mt2) setTimeout(() => {
+    if (S.station !== 'range') goStation('range', { snap: false });
+    seekMission(+mt2[1]);
+    _camSnap = true;
+    const s = missionSim.sampleAt(S.mt);
+    if (s) camMissionTick(0, s);
+  }, 1300);
+
   // 验证/演示：自动点火、发射、完整演示
   if (/[?&]ignite=1/.test(location.hash)) setTimeout(() => { goStation('bench'); setTimeout(() => $('#igniteBtn')?.click(), 600); }, 700);
   if (/[?&]launch=1/.test(location.hash)) setTimeout(() => { goStation('range'); setTimeout(() => $('#launchBtn')?.click(), 600); }, 700);
   if (/[?&]show=1/.test(location.hash)) setTimeout(() => runFullShow(), 900);
+  if (/[?&]debug=1/.test(location.hash)) setTimeout(dumpSceneStats, 2600);
+  const ma = location.hash.match(/audit=([\d.,]+)/);
+  const mam = location.hash.match(/auditCam=([a-z,]+)/);
+  if (ma) setTimeout(() => {
+    if (S.station !== 'range') goStation('range', { snap: false });
+    runCamAudit(ma[1].split(',').map(Number).filter(n => !isNaN(n)),
+      mam ? mam[1].split(',') : ['chase']);
+  }, 1500);
   loop();
+}
+
+/* ---------- 跟拍质量审计 ----------
+   #audit=3,20,45,60  依次把任务定格到这些时刻，检查每个机位下
+   相机是否钻地、与弹体的距离、弹体是否真的落在视锥内。
+   无头环境读不了画面，这条能自动回归"发射后看得到导弹"这类问题。 */
+function runCamAudit(times, modes) {
+  const rows = [];
+  for (const md of modes) {
+    S.missionCam = md;
+    for (const t of times) {
+      seekMission(t);
+      _camSnap = true;
+      const s = missionSim.sampleAt(S.mt);
+      if (!s) continue;
+      camMissionTick(0, s);
+      viewer.camera.updateMatrixWorld();
+      viewer.camera.matrixWorldInverse.copy(viewer.camera.matrixWorld).invert();
+      const fr = new THREE.Frustum().setFromProjectionMatrix(
+        new THREE.Matrix4().multiplyMatrices(viewer.camera.projectionMatrix, viewer.camera.matrixWorldInverse));
+      const cp = viewer.camera.position, mp = flyMissile.position;
+      rows.push({
+        cam: md, t: +t.toFixed(1), ph: s.ph, mach: +s.mach.toFixed(2),
+        dist: +cp.distanceTo(mp).toFixed(1),
+        camY: +cp.y.toFixed(1),
+        above: cp.y > 0,
+        inView: fr.containsPoint(mp),
+      });
+    }
+  }
+  const d = document.createElement('div');
+  d.id = 'camAudit'; d.style.display = 'none';
+  d.textContent = JSON.stringify(rows);
+  document.body.appendChild(d);
+}
+
+/* 调试自检：#debug=1 时把场景统计写进一个隐藏节点。
+   无头环境（截图/自动化）读不了画面，但能读到它，用于确认
+   模型真的建出来了、几何量级正常，而不是一个空场景。 */
+function dumpSceneStats() {
+  let meshes = 0, tris = 0, lines = 0, lights = 0;
+  viewer.scene.traverse(o => {
+    if (o.isLight) lights++;
+    if (o.isLine || o.isLineSegments) lines++;
+    if (o.isMesh && o.geometry) {
+      meshes++;
+      const g = o.geometry;
+      const c = g.index ? g.index.count : (g.attributes.position ? g.attributes.position.count : 0);
+      tris += c / 3;
+    }
+  });
+  const box = boxOfMeshes(M.root);
+  const size = box.getSize(new THREE.Vector3());
+  // 跟拍质量自检：相机与弹体的空间关系，直接回答"发射后还能不能看到导弹"
+  viewer.camera.updateMatrixWorld();
+  // matrixWorldInverse 只在 renderer.render() 内部刷新，手工做视锥判定前必须先自己求逆，
+  // 否则拿到的是上一帧的矩阵，判定结果不可信。
+  viewer.camera.matrixWorldInverse.copy(viewer.camera.matrixWorld).invert();
+  const camPos = viewer.camera.position;
+  const fly = flyMissile && flyMissile.visible ? flyMissile.position : null;
+  const frustum = new THREE.Frustum().setFromProjectionMatrix(
+    new THREE.Matrix4().multiplyMatrices(viewer.camera.projectionMatrix, viewer.camera.matrixWorldInverse));
+  const d = document.createElement('div');
+  d.id = 'debugStats'; d.style.display = 'none';
+  d.textContent = JSON.stringify({
+    meshes, tris: Math.round(tris), lines, lights,
+    missileLen: +size.y.toFixed(3), missileWide: +size.x.toFixed(3),
+    worldScale: MISSILE_WORLD_SCALE, station: S.station, cam: S.missionCam,
+    fov: +viewer.camera.fov.toFixed(1),
+    camera: [+camPos.x.toFixed(1), +camPos.y.toFixed(1), +camPos.z.toFixed(1)],
+    missile: fly ? [+fly.x.toFixed(1), +fly.y.toFixed(1), +fly.z.toFixed(1)] : null,
+    camDist: fly ? +camPos.distanceTo(fly).toFixed(1) : null,
+    camAboveGround: camPos.y > 0,
+    missileInView: fly ? frustum.containsPoint(fly) : null,
+  });
+  document.body.appendChild(d);
 }
 
 /* 失败兜底：任何初始化异常都不再静默卡死，而是给出可读提示 */

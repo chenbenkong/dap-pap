@@ -201,6 +201,10 @@ export class Plume {
     this.scale = 1;         // 世界尺度适配（机库=1）
   }
   setPower(p) { this.power = p; this.group.visible = p > 0.01; }
+  /** 世界尺度适配：光的作用半径必须跟着放大，
+      否则强度按面积补偿了、半径却还停在机库的 12 m，
+      近处会直接过曝成一团白光把弹体糊掉。 */
+  setDistance(scale) { this.light.distance = 12 * Math.max(scale, 1); }
   update(dt) {
     if (!this.group.visible) return;
     this.time += dt;

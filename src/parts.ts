@@ -475,6 +475,121 @@ function airfoilFinGeometry(opt: any = {}) {
 /* ============================================================
    主构建
    ============================================================ */
+/* ============================================================
+   科幻细节层
+   整机视图里弹体只有几十像素宽，这些细节是给「部件特写」和
+   「拆解视图」准备的——相机飞近或舱段散开后，它们才真正被看见。
+   ============================================================ */
+function addSciFiDetails(root, mats, R) {
+  const byName: any = {};
+  root.children.forEach(c => { if (c.name) byName[c.name] = c; });
+  /** 某舱段相对自身原点的轴向范围与实际半径（自动适配，不写死尺寸）。
+      只统计实体网格：粒子系统会把未激活的粒子停在极远处占位，
+      用 setFromObject 会把包围盒撑爆，细节尺寸随之失真。 */
+  function spanOf(grp) {
+    const box = new THREE.Box3(); box.makeEmpty();
+    const tmp = new THREE.Box3();
+    grp.updateMatrixWorld(true);
+    grp.traverse(o => {
+      if (!o.isMesh || !o.geometry) return;
+      const pos = o.geometry.attributes && o.geometry.attributes.position;
+      if (!pos) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      tmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      box.union(tmp);
+    });
+    if (box.isEmpty()) return { y0: 0, y1: .1, r: R };
+    const dy = grp.position.y;
+    return {
+      y0: box.min.y - dy, y1: box.max.y - dy,
+      r: Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * .5,
+    };
+  }
+
+  /* 1) 制导舱：四条能量导管 —— 沿轴向嵌在蒙皮里的发光条 */
+  const av = byName['avionics'];
+  if (av) {
+    const sp = spanOf(av), len = Math.max(sp.y1 - sp.y0, .05) * .78;
+    const glowMat = new THREE.MeshStandardMaterial({
+      name: 'energyLine', color: 0x0d2b3a, metalness: .2, roughness: .35,
+      emissive: 0x2ea8d8, emissiveIntensity: 2.4,
+    });
+    for (let i = 0; i < 4; i++) {
+      const a = i / 4 * Math.PI * 2 + Math.PI / 4;
+      const line = new THREE.Mesh(new THREE.BoxGeometry(.014, len, .009), glowMat);
+      line.position.set(Math.cos(a) * (sp.r - .002), (sp.y0 + sp.y1) * .5, Math.sin(a) * (sp.r - .002));
+      line.rotation.y = -a;
+      line.name = 'energyLine';
+      av.add(line);
+    }
+    // 环形集束箍：把四条导管在两端收口
+    const collarMat = new THREE.MeshStandardMaterial({ name: 'collar', color: 0x2b3138, metalness: .9, roughness: .32 });
+    [sp.y0 + len * .12, sp.y1 - len * .12].forEach(y => {
+      const c = new THREE.Mesh(new THREE.TorusGeometry(sp.r * .99, .012, 8, 40), collarMat);
+      c.rotation.x = Math.PI / 2; c.position.y = y;
+      av.add(c);
+    });
+  }
+
+  /* 2) 战斗部：黄黑警示环带 + 危险标识块 */
+  const wh = byName['warhead'];
+  if (wh) {
+    const sp = spanOf(wh), len = sp.y1 - sp.y0;
+    const warnMat = new THREE.MeshStandardMaterial({ name: 'warn', color: 0xd8a326, metalness: .25, roughness: .55 });
+    const darkMat = new THREE.MeshStandardMaterial({ name: 'warnDark', color: 0x1b1a17, metalness: .3, roughness: .6 });
+    // 斜纹用若干薄片拼出螺旋感，比贴图更有体积
+    const N = 14;
+    for (let i = 0; i < N; i++) {
+      const t = i / N;
+      const y = sp.y0 + len * .18 + t * len * .64;
+      const stripe = new THREE.Mesh(new THREE.CylinderGeometry(sp.r * 1.012, sp.r * 1.012, len * .64 / N * .52, 28, 1, true, t * 2.4, 1.1),
+        i % 2 ? darkMat : warnMat);
+      stripe.position.y = y;
+      stripe.rotation.y = t * .5;
+      wh.add(stripe);
+    }
+  }
+
+  /* 3) 发动机舱：外部推进剂管路 + 卡箍 + 刀状天线 */
+  const mt = byName['motor'];
+  if (mt) {
+    const sp = spanOf(mt), len = Math.max(sp.y1 - sp.y0, .05) * .8;
+    const pipeMat = new THREE.MeshStandardMaterial({ name: 'pipe', color: 0x8d99a6, metalness: .95, roughness: .26 });
+    const clampMat = new THREE.MeshStandardMaterial({ name: 'clamp', color: 0x333a43, metalness: .8, roughness: .45 });
+    // 两条对称管路：一根输送、一根回流
+    [1, -1].forEach(sgn => {
+      const a = sgn > 0 ? .55 : Math.PI - .55;
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(.011, .011, len, 10), pipeMat);
+      pipe.position.set(Math.cos(a) * (sp.r + .012), (sp.y0 + sp.y1) * .5, Math.sin(a) * (sp.r + .012));
+      mt.add(pipe);
+      // 沿途卡箍
+      for (let i = 1; i <= 4; i++) {
+        const t = i / 5;
+        const cl = new THREE.Mesh(new THREE.TorusGeometry(.016, .005, 6, 14), clampMat);
+        cl.position.set(Math.cos(a) * (sp.r + .012), sp.y0 + len * .1 + t * len * .8, Math.sin(a) * (sp.r + .012));
+        cl.rotation.x = Math.PI / 2;
+        mt.add(cl);
+      }
+    });
+  }
+
+  /* 4) 全弹通用：蒙皮散热槽（细密横向沟槽，近看才有的层次） */
+  ['avionics', 'motor'].forEach(k => {
+    const g = byName[k]; if (!g) return;
+    const sp = spanOf(g);
+    const slotMat = new THREE.MeshStandardMaterial({ name: 'slot', color: 0x161b21, metalness: .5, roughness: .7 });
+    const n = Math.floor((sp.y1 - sp.y0) / .085);
+    for (let i = 0; i < n; i++) {
+      const y = sp.y0 + (i + .5) * (sp.y1 - sp.y0) / n;
+      const slot = new THREE.Mesh(new THREE.TorusGeometry(sp.r * .995, .0045, 5, 26), slotMat);
+      slot.rotation.x = Math.PI / 2; slot.position.y = y;
+      g.add(slot);
+    }
+  });
+
+  void mats; void R;
+}
+
 export function buildMissile() {
   const maps = makeBodyMaps();
   const mats = makeMats(maps);
@@ -785,8 +900,42 @@ export function buildMissile() {
     desc: '飞机靠机翼升空，导弹靠尾舵“掰”自己。四个舵面协同差动，就能同时完成俯仰、偏航与滚转控制。',
   }});
 
+  addSciFiDetails(root, mats, R);
+
   const order = ['radome', 'seeker', 'warhead', 'fuze', 'avionics', 'motor', 'nozzle', 'fins'];
   const updateBurn = gMotor.userData.updateBurn;
+
+  /* ---------- 装配关系能量线 ----------
+     拆解时相邻舱段之间拉出一条发光连线，表明"这两段是装在一起的"。
+     没有它，散开的部件只是一堆悬浮零件，看不出装配顺序。        */
+  const linkSegs = order.length - 1;
+  const linkPos = new Float32Array(linkSegs * 6);
+  const linkGeo = new THREE.BufferGeometry();
+  linkGeo.setAttribute('position', new THREE.BufferAttribute(linkPos, 3));
+  const linkMat = new THREE.LineBasicMaterial({
+    color: 0x6fc7e8, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const links = new THREE.LineSegments(linkGeo, linkMat);
+  links.frustumCulled = false;
+  links.visible = false;
+  links.name = 'assemblyLinks';
+  root.add(links);
+  const _lk1 = new THREE.Vector3(), _lk2 = new THREE.Vector3();
+  function updateLinks(e) {
+    if (e <= .015) { links.visible = false; return; }
+    root.updateMatrixWorld(true);      // 刚改过部件位置，必须刷新才能取到正确世界坐标
+    for (let i = 0; i < linkSegs; i++) {
+      P[order[i]].anchor.getWorldPosition(_lk1);
+      P[order[i + 1]].anchor.getWorldPosition(_lk2);
+      root.worldToLocal(_lk1); root.worldToLocal(_lk2);
+      linkPos[i * 6] = _lk1.x; linkPos[i * 6 + 1] = _lk1.y; linkPos[i * 6 + 2] = _lk1.z;
+      linkPos[i * 6 + 3] = _lk2.x; linkPos[i * 6 + 4] = _lk2.y; linkPos[i * 6 + 5] = _lk2.z;
+    }
+    linkGeo.attributes.position.needsUpdate = true;
+    linkMat.opacity = Math.min(e * 1.25, .5);
+    links.visible = true;
+  }
 
   /* ---------- 对外行为（API 与 v1 完全一致）---------- */
   const api = {
@@ -800,6 +949,7 @@ export function buildMissile() {
         const target = grp.userData.basePos.clone().addScaledVector(grp.userData.explodeDir, e);
         grp.position.copy(target);
       }
+      updateLinks(e);
       const outw = 1 + e * .5;
       finDirs.forEach(({ ang, holder }) => {
         holder.position.set(

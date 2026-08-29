@@ -181,7 +181,9 @@ export function createScene(container) {
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0; ground.receiveShadow = false;
     ground.name = 'ground';
     world.add(ground);
-    // 大网格线：每 2 km 一根，覆盖 [-60,60] km
+    // 网格分两级：粗网格 2 km 一根看战略尺度，
+    // 细网格 250 m 一根覆盖弹道走廊——跟拍距离只有几十米时，
+    // 没有近处参照物就完全感觉不到速度。
     const gridPts = [], EXT = 60000, STEP = 2000;
     const mat = new THREE.LineBasicMaterial({ color: 0x16304f, transparent: true, opacity: .34 });
     for (let x = -EXT; x <= EXT; x += STEP) {
@@ -191,6 +193,16 @@ export function createScene(container) {
     const gg = new THREE.BufferGeometry();
     gg.setAttribute('position', new THREE.Float32BufferAttribute(gridPts, 3));
     world.add(new THREE.LineSegments(gg, mat));
+
+    const finePts = [], FEXT = 9000, FSTEP = 250;
+    const fineMat = new THREE.LineBasicMaterial({ color: 0x1d4a78, transparent: true, opacity: .22 });
+    for (let x = -FEXT; x <= FEXT; x += FSTEP) {
+      finePts.push(x, .6, -FEXT, x, .6, FEXT);
+      finePts.push(-FEXT, .6, x, FEXT, .6, x);
+    }
+    const fg = new THREE.BufferGeometry();
+    fg.setAttribute('position', new THREE.Float32BufferAttribute(finePts, 3));
+    world.add(new THREE.LineSegments(fg, fineMat));
     // 发射台（示意斜轨）
     const pad = new THREE.Mesh(new THREE.CylinderGeometry(14, 18, 6, 28),
       new THREE.MeshStandardMaterial({ color: 0x1a2331, metalness: .3, roughness: .8 }));
@@ -212,10 +224,51 @@ export function createScene(container) {
     };
   }
 
+  /* ---------- 相机接管 ----------
+     飞行跟拍时由外部直接驱动相机：必须完全绕开 OrbitControls，
+     否则 controls.update() 会用 target 反推球坐标、把手动设置的
+     position 又改写回去，表现为镜头打滑、抖动、跟不住弹体。      */
+  let camAuto = false;
+  const autoPos = new THREE.Vector3(), autoLook = new THREE.Vector3(), autoUp = new THREE.Vector3(0, 1, 0);
+  let autoFov = 0;
+  function setCamAuto(on) {
+    if (on === camAuto) return;
+    camAuto = !!on;
+    if (!camAuto) {
+      // 交还给轨道相机：把当前朝向折算成 target，避免视角突跳
+      camera.up.set(0, 1, 0);
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      controls.target.copy(camera.position).addScaledVector(dir, Math.max(8, camera.position.distanceTo(controls.target)));
+      camTween = null;
+    }
+  }
+  /** 由 main 每帧写入目标机位；内部自带平滑，避免硬切 */
+  function setCamRig(pos, look, up, fov) {
+    camera.position.copy(pos);
+    if (up) camera.up.copy(up); else camera.up.set(0, 1, 0);
+    camera.lookAt(look);
+    if (fov && Math.abs(camera.fov - fov) > .01) { camera.fov = fov; camera.updateProjectionMatrix(); }
+    void autoFov;
+  }
+
   /* ---------- 每帧更新 ---------- */
   const shake = { amp: 0 };
   function update(dt, controlsEnabled = true) {
-    controls.enabled = controlsEnabled;
+    controls.enabled = !camAuto && controlsEnabled;
+    if (camAuto) {
+      // 接管态：相机已由 setCamRig 写好，只叠加震动，不再跑轨道控制
+      if (shake.amp > .001) {
+        const s = shake.amp;
+        camera.position.x += (Math.random() - .5) * s;
+        camera.position.y += (Math.random() - .5) * s;
+        camera.position.z += (Math.random() - .5) * s;
+        shake.amp *= Math.exp(-dt * 4.2);
+      }
+      colorGradePass.material.uniforms['uTime'].value = performance.now() * 0.001;
+      composer.render();
+      return;
+    }
     if (camTween) {
       const k = Math.min(1, (performance.now() - camTween.t0) / camTween.dur);
       const e = camTween.ease(k);
@@ -254,6 +307,8 @@ export function createScene(container) {
   return {
     renderer, scene, camera, controls, hangar, world,
     flyCam, update, keyLight: key,
+    setCamAuto, setCamRig,
+    get camAuto() { return camAuto; },
     setWorldMode(on) {
       hangar.visible = !on; world.visible = !!on;
       (scene.fog as THREE.FogExp2).density = on ? 0.000016 : 0.012;

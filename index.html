@@ -115,6 +115,30 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 .show-btn.playing .tri{animation:blink 1s steps(2,end) infinite}
 @keyframes blink{50%{opacity:.15}}
 
+/* ---------- 音效开关 ---------- */
+.snd-btn{
+  appearance:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+  padding:8px 13px;border-radius:6px;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.04em;
+  color:var(--dim);background:rgba(255,255,255,.03);border:1px solid var(--line);
+  transition:color .2s,border-color .2s,background .2s;
+}
+.snd-btn:hover{color:var(--ink);border-color:var(--line-strong)}
+.snd-btn.on{color:var(--cyan);border-color:rgba(111,199,232,.5);background:rgba(111,199,232,.1)}
+/* 四格音量条：开启时点亮，关闭时压平 */
+.snd-ico{display:inline-flex;align-items:flex-end;gap:2px;height:12px}
+.snd-ico i{width:2.5px;background:currentColor;border-radius:1px;opacity:.32;transition:opacity .2s,height .2s}
+.snd-ico i:nth-child(1){height:4px}
+.snd-ico i:nth-child(2){height:7px}
+.snd-ico i:nth-child(3){height:10px}
+.snd-ico i:nth-child(4){height:12px}
+.snd-btn.on .snd-ico i{opacity:1}
+.snd-btn.on .snd-ico i:nth-child(1){animation:sndBar .9s ease-in-out infinite}
+.snd-btn.on .snd-ico i:nth-child(2){animation:sndBar .9s ease-in-out .12s infinite}
+.snd-btn.on .snd-ico i:nth-child(3){animation:sndBar .9s ease-in-out .24s infinite}
+.snd-btn.on .snd-ico i:nth-child(4){animation:sndBar .9s ease-in-out .36s infinite}
+@keyframes sndBar{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
+@media (prefers-reduced-motion:reduce){.snd-btn.on .snd-ico i{animation:none}}
+
 /* ---------- 飞行 HUD ---------- */
 .flight-hud{
   position:fixed;left:18px;top:200px;z-index:9;width:212px;
@@ -270,6 +294,29 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 .spd-btn{font-family:var(--mono);font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:4px 7px}
 .spd-btn.on{color:var(--amber);border-color:rgba(255,180,84,.5);background:rgba(255,180,84,.08)}
 
+/* ---------- 机位选择 ---------- */
+.mini-cap{
+  font-size:9.5px;letter-spacing:.16em;color:var(--faint);
+  display:flex;align-items:center;flex:0 0 auto;margin-right:2px;
+}
+.cam-group{display:flex;gap:3px;flex:1;flex-wrap:wrap}
+.cam-btn{
+  flex:1 1 auto;min-width:52px;
+  font-size:10.5px;letter-spacing:.02em;
+  color:var(--dim);border:1px solid var(--line);border-radius:4px;
+  padding:4px 5px;background:rgba(4,8,15,.4);
+}
+.cam-btn:hover{border-color:var(--line-strong);color:var(--ink)}
+.cam-btn.on{
+  color:var(--cyan);border-color:rgba(111,199,232,.55);
+  background:rgba(111,199,232,.11);box-shadow:inset 0 0 12px rgba(111,199,232,.09);
+}
+.cam-hint{
+  font-size:10px;line-height:1.5;color:var(--faint);
+  margin-top:5px;padding-left:2px;border-left:2px solid rgba(111,199,232,.28);
+  padding:3px 0 3px 8px;
+}
+
 /* ---------- 章节导航 ---------- */
 .chapter-nav{
   position:fixed; top:118px; left:0; right:0;
@@ -368,6 +415,9 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
       <button class="show-btn" id="fullShowBtn" title="自动播放：合拢 → 点火 → 发射 → 全弹道 → 命中">
         <span class="tri">▶</span><span>全流程演示</span>
       </button>
+      <button class="snd-btn on" id="sndBtn" title="音效开关：点火轰鸣 / 飞行破空 / 锁定告警 / 爆炸">
+        <span class="snd-ico"><i></i><i></i><i></i><i></i></span><span id="sndLabel">音效</span>
+      </button>
     </div>
     <p class="chapter-goal" id="stGoal">点击部件或左侧卡片，看清每个舱段的作用。</p>
   </div>
@@ -456,15 +506,22 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
       <div class="sim-timeline" id="timeline"><canvas id="timelineCv"></canvas></div>
       <div class="tl-caption"><span>T+00.0s</span><span id="tlPhaseNow">待发射</span><span id="tlTimeRight">T+00.0s</span></div>
       <div class="row" style="margin-top:7px">
-        <button class="btn-toggle on" data-cam="follow" id="camFollow">跟弹视角</button>
-        <button class="btn-toggle" data-cam="globalView" id="camGlobalView">全局弹道</button>
-        <button class="btn-ghost" id="missionReset">重置任务</button>
+        <span class="mini-cap">机位</span>
+        <div class="cam-group" id="camGroup">
+          <button class="cam-btn" data-cam="fpv" title="骑在弹体上看向前方，速度感最强">第一人称</button>
+          <button class="cam-btn on" data-cam="chase" title="挂在弹后上方，弹体占画面约四分之一">第三人称</button>
+          <button class="cam-btn" data-cam="cine" title="侧后方缓慢环绕，交代弹目关系">电影机位</button>
+          <button class="cam-btn" data-cam="global" title="战区尺度，看完整弹道">全局</button>
+          <button class="cam-btn" data-cam="free" title="交还鼠标自由环绕观察">自由</button>
+        </div>
       </div>
       <div class="row" style="margin-top:6px">
         <button class="btn-toggle on" id="losBtn">视线连线</button>
         <button class="btn-toggle" id="predictBtn">预测命中点</button>
         <button class="btn-toggle" id="targetMoveBtn">目标机动</button>
+        <button class="btn-ghost" id="missionReset">重置</button>
       </div>
+      <div class="cam-hint" id="camHint">第三人称：弹后 44 m 跟拍，末段视线自动压向目标舰</div>
       <div class="readout-pair" style="margin-top:7px">
         <div><small>弹目距离</small><b id="mSepVal">— m</b></div>
         <div><small>接近率</small><b id="mCloseVal">— m/s</b></div>
