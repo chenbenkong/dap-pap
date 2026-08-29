@@ -73,8 +73,12 @@ let viewer, M, plumeHangar;
 let flyMissile = null, plumeWorld = null, shipMesh = null, losLine = null, predictRing = null;
 let markerSprite = null, aimMark = null, planPath = null, trail = null, boom = null;
 let clipPlane = null;
-// 高亮：一束跟随所选部件的聚光（补光式"光感"，不覆盖原外观、不累计、单件）
-let hlLight = null, hlTarget = null, hlGrp = null;
+// 高亮 = 部件自发光（"透亮"），不是外部打光：材质/贴图/颜色都不覆盖，
+// 只是在本色基础上透出一层光，因此外观完整保留，仅用于区分"当前选中哪一件"。
+let hlMats = null;
+const HL_GLOW = new THREE.Color(0x9fe4ff);   // 冷白，贴合场景科技色
+const HL_MIX = .58;                          // 混入本色的比例：金属件留本色，深色件也亮得起来
+const HL_POWER = .60;                        // 自发光强度，克制，能分辨即可
 const missionSim = new MissionSim();
 const HANGAR_Y = 5.15;
 
@@ -337,7 +341,15 @@ function goStation(key, opts: any = {}) {
   }
 
   stopAllSims();
-  clearHighlight();          // 切换工位时收掉高亮，避免灯留在旧工位
+  clearHighlight();          // 切换工位时收掉高亮
+  // 离开试车台必须熄火：否则 burning 一直为真、按钮停在"燃烧中…"，
+  // 切回来时看起来像卡住了。
+  if (key !== 'bench' && S.burning) {
+    S.burning = false;
+    sfx.rocketOff();
+    const ib = $('#igniteBtn');
+    if (ib) { ib.textContent = '点火试车'; ib.classList.remove('armed'); }
+  }
   if (key === 'range') {
     enterRange(opts.snap !== false);
     setPanelTab('tele', '飞行遥测 · 全任务');
@@ -473,46 +485,42 @@ function selectPart(key, { fly = false } = {}) {
   }
 }
 
-/* 高亮 = 在所选部件旁补一束聚光：本体材质/贴图/颜色完全不动，
-   只是被照得更亮、更有"光感"。部件可随爆炸/自动旋转移动，
-   每帧根据相机方向重算灯位，始终从观察者这一侧打光。 */
+/* 高亮 = 让被选部件自发光。
+   前提是每个部件已独占自己的材质实例（见 parts.ts 的 reg 克隆），
+   否则改共享材质会让所有共用件一起亮，就做不到"只亮这一件"。 */
 function applyHighlight(key) {
   const p = M.parts[key];
   if (!p) return;
-  hlGrp = p.anchor.parent;
-  if (!hlLight) return;
-  // 立即定位一次，updateHighlight 之后每帧续跟
-  hlLight.intensity = 1;           // 占位，真实强度在 updateHighlight 内按尺寸算
-  updateHighlight();
+  clearHighlight();                  // 先收掉上一个：永远只亮一件，不累计
+  const grp = p.anchor.parent;
+  const mats = new Set<any>();
+  grp.traverse(o => { if (o.isMesh && o.material) mats.add(o.material); });
+  mats.forEach(m => {
+    if (m.userData.hlBase === undefined) {
+      m.userData.hlBase = { em: m.emissiveIntensity ?? 0, col: m.emissive ? m.emissive.getHex() : 0x000000 };
+    }
+    // 在材质本色基础上混入冷白光：金属件仍保留质感，深色内构件也亮得起来
+    const own = m.color ? m.color.clone() : new THREE.Color(0xffffff);
+    const glow = own.lerp(HL_GLOW, HL_MIX).multiplyScalar(HL_POWER);
+    m.emissive = m.emissive || new THREE.Color(0);
+    m.emissive.copy(glow);
+    m.emissiveIntensity = 1;
+  });
+  hlMats = mats;
   sfx.select();
 }
 function clearHighlight() {
-  hlGrp = null;
-  if (hlLight) hlLight.intensity = 0;
-  // 注意：保留 window.__focusPart.key —— 卡片仍选中，只是灯灭；
+  if (hlMats) {
+    hlMats.forEach(m => {
+      const b = m.userData.hlBase;
+      if (!b) return;
+      if (m.emissive) m.emissive.setHex(b.col);
+      m.emissiveIntensity = b.em;
+    });
+    hlMats = null;
+  }
+  // 注意：保留 window.__focusPart.key —— 卡片仍选中，只是不再发光；
   // 这样重新打开开关时能立刻点亮上次点选的部件。
-}
-const _hlCenter = new THREE.Vector3(), _hlView = new THREE.Vector3(), _hlLight = new THREE.Vector3(), _hlUp = new THREE.Vector3(0, 1, 0);
-function updateHighlight() {
-  if (!hlLight || !hlGrp) return;
-  const box = boxOfMeshes(hlGrp);
-  if (box.isEmpty()) return;
-  const sph = box.getBoundingSphere(new THREE.Sphere());
-  const r = Math.max(sph.radius, 0.18);
-  _hlCenter.copy(sph.center);
-  // 从相机这一侧打光：灯位 = 中心 + 视线反方向*3r + 略上抬，
-  // 这样无论怎么转，被选中的部件始终被照亮、且不会把光打到地底下太深
-  _hlView.copy(viewer.camera.position).sub(_hlCenter).normalize();
-  if (_hlView.lengthSq() < 1e-4) _hlView.set(0, .4, 1);
-  _hlLight.copy(_hlCenter).addScaledVector(_hlView, r * 3.0).addScaledVector(_hlUp, r * 0.9);
-  hlLight.position.copy(_hlLight);
-  hlTarget.position.copy(_hlCenter);
-  hlLight.distance = r * 10;
-  hlLight.angle = 0.72;
-  hlLight.penumbra = 0.65;
-  hlLight.decay = 1.7;
-  // 强度随部件尺寸放大：小件(引信环)柔光、大件(发动机)更强，但都被距离衰减限制在本体附近
-  hlLight.intensity = THREE.MathUtils.clamp(r * 34, 16, 82);
 }
 
 /* ============================================================ */
@@ -529,7 +537,7 @@ function thrustProfile(f) {   // f∈[0,1] 已燃比
 function setupBurnUI() {
   $('#igniteBtn').addEventListener('click', () => {
     if (S.burning) return;
-    if (S.clock >= S.BURN_T) { S.clock = 0; M.updateBurn(0); S.burnChart = []; }
+    if (S.clock >= S.BURN_T) { S.clock = 0; _lastBurnFrac = -1; burnFrac(0); S.burnChart = []; }
     S.burning = true;
     $('#igniteBtn').textContent = '燃烧中…';
     $('#igniteBtn').classList.add('armed');
@@ -541,7 +549,7 @@ function setupBurnUI() {
     const v = +e.target.value / 100;
     if (!S.burning) {
       S.clock = v * S.BURN_T;
-      M.updateBurn(v);
+      _lastBurnFrac = -1; burnFrac(v);   // 手动拖动也要走同一节流口径
       const prof = thrustProfile(v);
       plumeHangar.setPower(prof > 0.02 ? Math.max(prof, .18) : 0);
       updateThrustReadout(prof);
@@ -552,11 +560,20 @@ function setupBurnUI() {
   });
 }
 
+/* 药柱退移是整块 ExtrudeGeometry 的重建。每帧重建会在 7 秒里持续制造
+   上百份几何垃圾，GC 一抖就表现为"点火后卡住"。按燃面进度增量节流
+   （全程约 40 次重建），肉眼看仍是连续退移。 */
+let _lastBurnFrac = -1;
+function burnFrac(f) {
+  if (Math.abs(f - _lastBurnFrac) < .004 && f < 1) return;
+  _lastBurnFrac = f;
+  M.updateBurn(f);
+}
 function tickBurn(dt) {
   if (!(S.burning && S.station === 'bench')) return;
   S.clock += dt;
   const f = Math.min(S.clock / S.BURN_T, 1);
-  M.updateBurn(f);
+  burnFrac(f);
   const prof = thrustProfile(f);
   S.curProfile = prof;
   plumeHangar.setPower(Math.max(prof, f >= 1 ? 0 : .12));
@@ -776,10 +793,20 @@ const CAM_PRESET: any = {
 const _camGoalPos = new THREE.Vector3(), _camGoalLook = new THREE.Vector3();
 const _camNowPos = new THREE.Vector3(), _camNowLook = new THREE.Vector3();
 const _camNowUp = new THREE.Vector3(0, 1, 0), _camGoalUp = new THREE.Vector3(0, 1, 0);
+// 跟拍用的「相对弹体偏移量」：平滑在弹体局部做，才能保证零滞后
+const _offGoalPos = new THREE.Vector3(), _offGoalLook = new THREE.Vector3();
+const _offNowPos = new THREE.Vector3(), _offNowLook = new THREE.Vector3();
 let _camFov = 46, _camSnap = true;
 const _vhat = new THREE.Vector3(), _horiz = new THREE.Vector3();
 const _cRight = new THREE.Vector3(), _cUp = new THREE.Vector3();
 const _toShip = new THREE.Vector3(), _lookDir = new THREE.Vector3(), _fwdFlat = new THREE.Vector3();
+
+/* 弹体在飞行世界里的实际尺寸（本体局部跨度 × 放大倍率）。
+   机位距离/高度全部以弹长为基准，改 MISSILE_WORLD_SCALE 时构图自动跟随。 */
+const MISSILE_LEN = 6.9;      // 局部跨度：喷口 -3.7 ~ 罩尖 3.18
+const MISSILE_RAD = 0.55;
+function missileLen() { return MISSILE_LEN * MISSILE_WORLD_SCALE; }
+function missileRad() { return MISSILE_RAD * MISSILE_WORLD_SCALE; }
 
 /** 由速度方向构造稳定的正交基（前向/右向/上向），垂直爬升时自动退化处理 */
 function basisFromVel(vel, outFwd, outRight, outUp) {
@@ -795,9 +822,11 @@ function basisFromVel(vel, outFwd, outRight, outUp) {
 /** 计算某一模式在当前时刻的理想机位，写入 _camGoalPos / _camGoalLook / _camGoalUp，返回目标 FOV */
 function calcCamGoal(mode, s, spd, fwd, right, up) {
   const P = CAM_PRESET[mode];
+  const L = missileLen(), r = missileRad();
   if (mode === 'fpv') {
-    // 相机贴在弹背 slightly 后方，弹体前段与弹翼入画，正前方是来袭方向
-    _camGoalPos.copy(_mPos).addScaledVector(fwd, -3.2 * MISSILE_WORLD_SCALE).addScaledVector(up, 2.1 * MISSILE_WORLD_SCALE);
+    /* 骑在弹背：机位在弹体中后段上方。
+       不能再退到喷口处——那里正对羽流，画面会被火焰糊满、只剩一个尾端。 */
+    _camGoalPos.copy(_mPos).addScaledVector(fwd, -L * .35).addScaledVector(up, r * 2.4);
     _camGoalLook.copy(_mPos).addScaledVector(fwd, P.ahead);
     // 末段：视线压向目标舰，让拦截过程保留在画面中央
     if (s.ph === 2 && shipMesh) {
@@ -815,27 +844,32 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     _horiz.set(-fwd.x, 0, -fwd.z);
     if (_horiz.lengthSq() < 1e-6) _horiz.set(0, 0, -1);
     _horiz.normalize();
-    let dist = P.dist, hgt = P.hgt;
-    if (mode === 'cine') {
-      // 侧后方缓慢环绕
-      const ang = Math.sin(performance.now() * .00016) * .85;
-      const ca = Math.cos(ang), sa = Math.sin(ang);
-      const hx = _horiz.x, hz = _horiz.z;
-      _horiz.set(hx * ca - hz * sa, 0, hx * sa + hz * ca);
-      dist *= 1.35; hgt *= 1.9;
-    }
-    // 速度越快镜头拉越远，保持弹体在画面中的占比稳定
-    dist *= 1 + clamp(spd / 1100, 0, 1) * .55;
+    /* 关键：机位必须偏离弹尾轴线，绝不能正对弹尾！
+       正后方跟拍只能看见尾部一个圆截面，细长的弹体被自己完全挡住，
+       观感就是"很小、只看得见尾端"。这里固定偏到侧后方约 33°，
+       让弹体以侧影入画；电影机位再在其基础上缓慢环绕。 */
+    /* 摆动范围必须整体避开 0（弹尾轴线）：电影机位原来在 0.62±0.85 之间摆动，
+       摆到 azim≈0 时又变成正对弹尾，弹体只剩一个圆截面、占比掉到 11%。
+       现在让它在 26°~89° 之间环绕，全程都是侧影/四分之三视角。 */
+    const azim = mode === 'chase'
+      ? 0.58 + Math.sin(performance.now() * .00009) * .10
+      : 1.05 + Math.sin(performance.now() * .00016) * .42;
+    const ca = Math.cos(azim), sa = Math.sin(azim);
+    const hx = _horiz.x, hz = _horiz.z;
+    _horiz.set(hx * ca - hz * sa, 0, hx * sa + hz * ca);
+    // 距离/高度按弹长取：改世界放大倍率时构图自动跟随，且保证是"特写"
+    const dist = (mode === 'cine' ? L * 1.9 : L * 1.4) * (1 + clamp(spd / 1100, 0, 1) * .35);
+    const hgt = mode === 'cine' ? L * .72 : L * .38;
     _camGoalPos.copy(_mPos).addScaledVector(_horiz, dist).addScaledVector(WORLD_UP, hgt);
     _camGoalPos.y = Math.max(_camGoalPos.y, 12);           // 地面兜底，杜绝钻地
 
-    // 视线锚点：沿「水平前方」引导，再略微上抬，让弹体落在画面中心偏下、
-    // 前方留出空间。这里不能用 3D 速度方向前移——助推段速度上仰 60°~70°，
-    // 前方几十米处会远高于弹体，相机随之仰头，弹体被压到画面下缘之外
-    // （实测夹角 22.4° > 垂直半视角 21°，导弹整个掉出视野）。
+    /* 视线锚点：沿「水平前方」略微前引，再微抬，让弹体稳定落在画面中部。
+       不能用 3D 速度方向前移——助推段速度上仰 60°~70°，前方几十米处会远高于弹体，
+       相机随之仰头，弹体被压到画面下缘之外（实测夹角 22.4° > 垂直半视角 21°，整个出画）。
+       也不能前引太远：视点推到弹前方几十米，弹体会被挤到画面边缘。现在只前引约 0.3 个弹长。 */
     _fwdFlat.set(fwd.x, 0, fwd.z);
     if (_fwdFlat.lengthSq() < 1e-6) _fwdFlat.set(0, 0, 1); else _fwdFlat.normalize();
-    _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, P.ahead).addScaledVector(WORLD_UP, dist * .09);
+    _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, L * .30).addScaledVector(WORLD_UP, hgt * .18);
     // 末段：视线偏向目标舰，弹与目标同框（同样取水平投影，避免俯冲时视线砸向海面）
     if (s.ph === 2 && shipMesh) {
       _toShip.copy(_sPos).sub(_mPos);
@@ -843,7 +877,7 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
         _lookDir.set(_toShip.x, 0, _toShip.z);
         if (_lookDir.lengthSq() < 1e-6) _lookDir.copy(_fwdFlat); else _lookDir.normalize();
         _lookDir.lerp(_fwdFlat, .45).normalize();
-        _camGoalLook.copy(_mPos).addScaledVector(_lookDir, P.ahead * 1.3).addScaledVector(WORLD_UP, dist * .09);
+        _camGoalLook.copy(_mPos).addScaledVector(_lookDir, L * 1.2).addScaledVector(WORLD_UP, hgt * .18);
       }
     }
     _camGoalUp.copy(WORLD_UP);
@@ -1084,14 +1118,26 @@ function updateMissionSound(s) {
 }
 let _pnTick = 0;
 function tickRange(dt) {
-  if (S.station !== 'range' || !S.missionPlaying || S.missionEnded) return;
+  if (S.station !== 'range') return;
   const sm = missionSim.samples;
+  if (!sm.length) return;
+  /* 命中之后 / 暂停时也必须继续驱动相机：
+     原来这里直接 return，相机就冻在最后一帧，而跟拍机位此刻正在火球内部，
+     画面先是黑掉、随后整个应用像卡死一样不再响应。 */
+  if (!S.missionPlaying || S.missionEnded) {
+    const sp = missionSim.sampleAt(Math.min(S.mt, missionDuration()));
+    if (sp) camMissionTick(dt, sp);
+    return;
+  }
   S.mt += dt * S.spd * (location.search.includes('fast') ? 4 : 1);
   const dur = sm[sm.length - 1].t;
   if (S.mt >= dur) {
     S.mt = dur; S.missionPlaying = false; S.missionEnded = true;
     updatePauseBtn();
     $('#launchBtn').textContent = '重新发射';
+    // 已经炸了：收掉弹体与尾焰，别把它们留在火球里
+    if (flyMissile) flyMissile.visible = false;
+    if (plumeWorld) plumeWorld.setPower(0);
     // 命中：在目标舰处起爆
     impactPoint(_impV);
     boom.fire(new THREE.Vector3(_impV.x, 16, _impV.z), 130);
@@ -1133,6 +1179,7 @@ const _pv2 = new THREE.Vector3(), _pv3 = new THREE.Vector3(), _pv4 = new THREE.V
 let _camAnchor = new THREE.Vector3(9000, 400, 2600);
 function camMissionTick(dt, s) {
   if (!flyMissile) return;
+  if (S.missionEnded) { aftermathCam(dt); return; }   // 命中后切战后环绕机位
   missionVelAt(s.t, _mVel);
   _mPos.set(s.px, s.py, s.pz);
   const mode = S.missionCam;
@@ -1158,17 +1205,57 @@ function camMissionTick(dt, s) {
     if (planPath) planPath.visible = (mode === 'cine');
   }
 
-  // 平滑：切视角时瞬移（否则从全局 lerp 到弹背会穿过整片地形）
+  // 切换机位时瞬移（否则从全局 lerp 到弹背会穿过整片地形）
   if (_camSnap) {
     _camNowPos.copy(_camGoalPos); _camNowLook.copy(_camGoalLook);
     _camNowUp.copy(_camGoalUp); _camFov = goalFov; _camSnap = false;
-  } else {
+    // 同步初始化相对偏移，避免下一帧从零向量缓动过来
+    _offNowPos.copy(_camGoalPos).sub(_mPos);
+    _offNowLook.copy(_camGoalLook).sub(_mPos);
+  } else if (mode === 'global') {
+    // 全局是缓慢环绕，位置插值无副作用
     const k = 1 - Math.exp(-dt * resp);
     _camNowPos.lerp(_camGoalPos, k);
-    _camNowLook.lerp(_camGoalLook, Math.min(1, k * 1.35));
+    _camNowLook.lerp(_camGoalLook, k);
+    _camNowUp.lerp(_camGoalUp, k).normalize();
+    _camFov += (goalFov - _camFov) * k;
+  } else {
+    /* 跟拍必须用「相对弹体的偏移量」做平滑，不能直接平滑世界坐标！
+       指数平滑的稳态滞后 ≈ 速度 / 响应系数：超声速下（约 1000 m/s、resp 4.2）
+       相机和视点都会被甩在弹后 200+ 米 —— 弹体又小又飘、爬升时飞出画面上缘；
+       视点滞后更致命，相机等于回头看，弹体直接出画。
+       这里把目标机位换算成相对弹体的偏移，只对偏移量做平滑再挂回弹体当前位置：
+       相对关系保留电影感的缓动，但对弹体零滞后。 */
+    const k = 1 - Math.exp(-dt * resp);
+    _offGoalPos.copy(_camGoalPos).sub(_mPos);
+    _offGoalLook.copy(_camGoalLook).sub(_mPos);
+    _offNowPos.lerp(_offGoalPos, k);
+    _offNowLook.lerp(_offGoalLook, Math.min(1, k * 1.35));
+    _camNowPos.copy(_mPos).add(_offNowPos);
+    _camNowLook.copy(_mPos).add(_offNowLook);
     _camNowUp.lerp(_camGoalUp, k).normalize();
     _camFov += (goalFov - _camFov) * k;
   }
+  viewer.setCamRig(_camNowPos, _camNowLook, _camNowUp, _camFov);
+}
+
+/* 命中之后：跟拍机位离弹体只有几十米，而火球半径约 130 m ——
+   相机正好在火球内部，画面会被糊成一片黑。这里退到火球外做一个缓慢环绕，
+   让爆炸完整可见，同时相机继续被驱动（否则画面会整帧冻住）。 */
+const _aftC = new THREE.Vector3();
+function aftermathCam(dt) {
+  impactPoint(_aftC);
+  _aftC.y = Math.max(_aftC.y, 40);
+  const R = 640;
+  const ang = performance.now() * .00014;
+  _camGoalPos.set(_aftC.x + Math.cos(ang) * R, _aftC.y + 230, _aftC.z + Math.sin(ang) * R);
+  _camGoalLook.copy(_aftC);
+  _camGoalUp.copy(WORLD_UP);
+  const k = 1 - Math.exp(-dt * 1.5);
+  _camNowPos.lerp(_camGoalPos, k);
+  _camNowLook.lerp(_camGoalLook, k);
+  _camNowUp.lerp(_camGoalUp, k).normalize();
+  _camFov += (42 - _camFov) * k;
   viewer.setCamRig(_camNowPos, _camNowLook, _camNowUp, _camFov);
 }
 
@@ -1183,8 +1270,8 @@ function syncRangeFill(inp) {
 /* ---------- 机位切换 ---------- */
 const CAM_HINT: any = {
   fpv: '第一人称：骑在弹背上，视野随速度张开，末段视线压向目标舰',
-  chase: '第三人称：弹后跟拍，弹体占画面约一半',
-  cine: '电影机位：侧后方缓慢环绕，看清扫全貌与弹目关系',
+  chase: '第三人称：侧后方约 33° 跟拍，弹体以侧影入画、占画面四到九成',
+  cine: '电影机位：侧后方 36°~84° 缓慢环绕，交代弹目关系，不会摆到正对弹尾',
   global: '全局：战区尺度俯瞰完整弹道，菱形光标标出导弹位置',
   free: '自由：交还鼠标，可自由环绕观察（拖动旋转 / 滚轮缩放）',
 };
@@ -1416,20 +1503,24 @@ function applyCutaway() {
 /*                        主 循 环                                */
 /* ============================================================ */
 let lastT = performance.now();
+let _guardCount = 0;
+/** 任何一帧里抛异常都会让 requestAnimationFrame 断掉、整个应用永久卡死。
+    这里把 rAF 排在最前面，并逐个子系统隔离，单点出错只丢该模块，画面继续跑。 */
+function guardErr(tag, e) {
+  if (_guardCount++ < 4) console.warn('[dap-pap] ' + tag + ' 出错已隔离：', e);
+}
 function loop() {
+  requestAnimationFrame(loop);        // 先排下一帧：任何异常都不会让画面停死
   const now = performance.now();
   const dt = Math.min((now - lastT) / 1000, .12);   // 低帧率下避免慢动作(子步长内再细分)
   lastT = now;
-  tickBurn(dt);
-  tickRange(dt);
-  plumeHangar.update(dt);
-  plumeWorld && plumeWorld.update(dt);
-  boom && boom.update(dt);
-  updateLabels(dt);
-  // 自动爆炸小呼吸(ch1未操作时缓慢提示?)
-  updateHighlight();
-  viewer.update(dt);
-  requestAnimationFrame(loop);
+  try { tickBurn(dt); } catch (e) { guardErr('试车台', e); }
+  try { tickRange(dt); } catch (e) { guardErr('靶场', e); }
+  try { plumeHangar.update(dt); } catch (e) { guardErr('机库羽流', e); }
+  try { plumeWorld && plumeWorld.update(dt); } catch (e) { guardErr('飞行羽流', e); }
+  try { boom && boom.update(dt); } catch (e) { guardErr('爆炸', e); }
+  try { updateLabels(dt); } catch (e) { guardErr('标注', e); }
+  try { viewer.update(dt); } catch (e) { guardErr('渲染', e); }
 }
 
 /* ============================================================ */
@@ -1451,14 +1542,6 @@ async function boot() {
 
   viewer.hangar.add(M.root);
 
-  // 高亮补光：一盏聚光，挂在机库里，跟随被选部件。默认关（intensity=0）。
-  // 只照部件几何、不碰任何材质，所以原外观 100% 保留，纯粹是"加光感"。
-  hlTarget = new THREE.Object3D();
-  viewer.hangar.add(hlTarget);
-  hlLight = new THREE.SpotLight(0xfff1da, 0, 8, 0.72, 0.65, 1.7);
-  hlLight.target = hlTarget;
-  hlLight.castShadow = false;
-  viewer.hangar.add(hlLight);
   plumeHangar = new Plume(M.nozzleTip);
   plumeHangar.group.visible = false;
   plumeHangar.scale = 1.15;

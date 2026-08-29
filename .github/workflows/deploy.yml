@@ -36,6 +36,9 @@ jobs:
       - name: Physics self-test
         run: npm run selftest
 
+      - name: Camera tracking audit
+        run: npm run auditcam
+
       - name: Build
         run: npm run build
 

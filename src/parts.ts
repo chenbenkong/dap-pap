@@ -849,6 +849,19 @@ export function buildMissile() {
     P[key] = Object.assign({ key, anchor, basePos: grp.position.clone(), curOffset: new THREE.Vector3() }, conf.meta);
     root.add(grp);
     grp.traverse(o => { if (o.isMesh && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; } });
+    /* 让每个部件独占自己的一份材质实例。
+       多个舱段原本共用同一批材质（steel 几乎被全部舱段复用），
+       若直接改 emissive 做自发光高亮，所有共用件会跟着一起亮，
+       就做不到"只高亮一个部位"。克隆之后单件自发光才成立。
+       克隆会共享贴图，着色器程序也复用，开销可忽略。 */
+    const matCache = new Map<any, any>();
+    grp.traverse(o => {
+      if (!o.isMesh || !o.material) return;
+      const src = o.material;
+      let cl = matCache.get(src);
+      if (!cl) { cl = src.clone(); cl.name = src.name; matCache.set(src, cl); }
+      o.material = cl;
+    });
   }
 
   reg('radome', { grp: gRadome, dir: [0, 2.2, 0], anchor: [0, 2.8, 0], meta: {
@@ -901,6 +914,14 @@ export function buildMissile() {
   }});
 
   addSciFiDetails(root, mats, R);
+
+  /* 材质已按部件克隆过，剖视 / 喉衬发热这类"全局按名字找材质"的操作
+     必须作用于真正在用的实例，否则裁剪面会打在已被替换掉的原始材质上而失效。 */
+  const usedMats: any[] = [];
+  {
+    const seen = new Set<any>();
+    root.traverse((o: any) => { if (o.isMesh && o.material && !seen.has(o.material)) { seen.add(o.material); usedMats.push(o.material); } });
+  }
 
   const order = ['radome', 'seeker', 'warhead', 'fuze', 'avionics', 'motor', 'nozzle', 'fins'];
   const updateBurn = gMotor.userData.updateBurn;
@@ -969,9 +990,9 @@ export function buildMissile() {
       });
     },
 
-    /* 剖视: 只裁剪外壳蒙皮材质 */
-    shellMats: [mats.paint, mats.radome, mats.fin],
-    allMats: Object.values(mats),
+    /* 剖视: 只裁剪外壳蒙皮材质（取克隆后真正在用的实例） */
+    shellMats: usedMats.filter(m => m.name === 'paint' || m.name === 'radome' || m.name === 'fin'),
+    allMats: usedMats,
 
     disposeAll() { root.traverse(o => { const m = o as any; if (m.geometry) m.geometry.dispose(); }); },
   };
