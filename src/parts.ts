@@ -47,11 +47,11 @@ function makeBodyMaps() {
   const rgh = document.createElement('canvas'); rgh.width = rw; rgh.height = rh;
   const g = rgh.getContext('2d');
 
-  /* ---------- 基底：冷灰军械漆 ---------- */
-  a.fillStyle = '#8e969d'; a.fillRect(0, 0, TW, TH);
-  h.fillStyle = 'rgb(128,128,128)'; h.fillRect(0, 0, TW, TH);
-  mm.fillStyle = 'rgb(24,24,24)'; mm.fillRect(0, 0, TW, TH);      // 漆面≈非金属
-  g.fillStyle = 'rgb(112,112,112)'; g.fillRect(0, 0, rw, rh);     // 基础粗糙度 .44
+  /* ---------- 基底：深空灰蓝隐身涂层（科幻向，不再是军械灰） ---------- */
+  a.fillStyle = '#2c3646'; a.fillRect(0, 0, TW, TH);
+  h.fillStyle = 'rgb(104,104,104)'; h.fillRect(0, 0, TW, TH);
+  mm.fillStyle = 'rgb(20,20,20)'; mm.fillRect(0, 0, TW, TH);      // 涂层≈非金属
+  g.fillStyle = 'rgb(120,120,120)'; g.fillRect(0, 0, rw, rh);     // 基础粗糙度 .47
 
   /* ---------- 整体明暗：前端受光、尾部烟熏 ---------- */
   {
@@ -178,38 +178,38 @@ function makeBodyMaps() {
     a.textAlign = 'center'; a.textBaseline = 'middle';
     a.fillText(text, 0, 0); a.restore();
   }
-  stamp('MLAB-02', .30, -.6, 34, 'rgba(28,38,50,.9)');
-  stamp('POP-UP TEXTBOOK · INTERACTIVE LAB', .30, -1.15, 15, 'rgba(44,54,66,.75)');
-  stamp('LIFT HERE', .62, .05, 20, 'rgba(24,30,38,.82)');
-  stamp('↑ FWD', .30, .95, 15, 'rgba(28,38,50,.8)');
+  stamp('AURORA-7', .30, -.6, 34, 'rgba(126,228,255,.92)');
+  stamp('KINETIC INTERCEPTOR · MK.VII', .30, -1.15, 15, 'rgba(98,168,198,.78)');
+  stamp('PLASMA BUS ACCESS', .62, .05, 20, 'rgba(126,228,255,.85)');
+  stamp('↑ FWD', .30, .95, 15, 'rgba(126,228,255,.85)');
   // 吊装三角
   for (const u of [.60, .64]) {
     a.save(); a.translate(u * TW, worldYToCanvasY(.28)); a.rotate(-Math.PI / 2);
-    a.fillStyle = 'rgba(18,24,32,.88)';
+    a.fillStyle = 'rgba(12,18,26,.92)';
     a.beginPath(); a.moveTo(0, -9); a.lineTo(8, 6); a.lineTo(-8, 6); a.closePath(); a.fill();
     a.restore();
   }
-  // NO STEP 警示框（尾部 ×2）
+  // 能量警示框（尾部 ×2）
   for (const u of [.18, .68]) {
     const x = u * TW, y = worldYToCanvasY(-1.95);
     a.save(); a.translate(x, y); a.rotate(-Math.PI / 2);
-    a.strokeStyle = 'rgba(168,30,30,.9)'; a.lineWidth = 3;
+    a.strokeStyle = 'rgba(64,224,255,.95)'; a.lineWidth = 3;
     a.strokeRect(-44, -13, 88, 26);
-    a.fillStyle = 'rgba(168,30,30,.9)';
+    a.fillStyle = 'rgba(64,224,255,.95)';
     a.font = 'bold 17px Arial'; a.textAlign = 'center'; a.textBaseline = 'middle';
-    a.fillText('NO STEP', 0, 1);
+    a.fillText('THRUST', 0, 1);
     a.restore();
   }
-  // 战斗部警示
-  stamp('HIGH EXPLOSIVE', .5, 1.5, 13, 'rgba(160,34,34,.85)');
-  stamp('EXERCISE', .82, 1.68, 13, 'rgba(44,80,56,.85)');
-  // 中性机徽（圆环+三角标）
+  // 战斗部警示（琥珀色对比）
+  stamp('MFR-7 WARHEAD · 120 kg', .5, 1.5, 13, 'rgba(255,160,70,.92)');
+  stamp('EXO-ATMO CAPABLE', .82, 1.68, 13, 'rgba(88,208,255,.82)');
+  // 单位机徽（青环 + 三角标）
   {
     const x = .5 * TW, y = worldYToCanvasY(1.62);
     a.save(); a.translate(x, y); a.rotate(-Math.PI / 2); a.scale(2, 1);
-    a.strokeStyle = 'rgba(30,40,52,.9)'; a.lineWidth = 4;
+    a.strokeStyle = 'rgba(126,228,255,.95)'; a.lineWidth = 4;
     a.beginPath(); a.arc(0, 0, 22, 0, 7); a.stroke();
-    a.fillStyle = 'rgba(30,40,52,.9)';
+    a.fillStyle = 'rgba(126,228,255,.95)';
     a.beginPath(); a.moveTo(0, -13); a.lineTo(12, 9); a.lineTo(-12, 9); a.closePath(); a.fill();
     a.restore();
   }
@@ -229,11 +229,11 @@ function makeBodyMaps() {
     a.strokeStyle = 'rgba(30,36,44,.9)'; a.lineWidth = 2; a.strokeRect(-58, -46, 116, 92);
     a.fillStyle = 'rgba(28,34,42,.92)';
     a.font = 'bold 15px Arial'; a.textAlign = 'center'; a.textBaseline = 'middle';
-    a.fillText('AAM / TRAINER', 0, -32);
+    a.fillText('AURORA-7 / INTERCEPTOR', 0, -32);
     a.font = '11px Arial';
-    a.fillText('S/N  ML-0207-EXP', 0, -14);
-    a.fillText('LOT  2026-08', 0, -1);
-    a.fillText('MFD  DAP-PAP LAB', 0, 12);
+    a.fillText('S/N  AR-7-0729-X', 0, -14);
+    a.fillText('LOT  2089-06', 0, -1);
+    a.fillText('MFD  DAP-PAP ASTRO WORKS', 0, 12);
     for (let i = 0, x = -50; x < 50; x += 3 + Math.random() * 3, i++) {
       a.fillStyle = i % 3 === 0 ? 'rgba(20,24,30,.95)' : 'rgba(20,24,30,.6)';
       a.fillRect(x, 22, 1 + Math.random() * 2, 18);
@@ -350,25 +350,27 @@ function makeMats(maps) {
     metalness: .35, roughness: .78, clearcoat: .7, clearcoatRoughness: .18,
     transparent: true, opacity: .82, envMapIntensity: 1.2, side: THREE.DoubleSide,
   });
-  // 弹翼/舵面漆面（薄锐缘、低清漆，避免“厚塑料片”）
+  // 弹翼/舵面漆面（薄锐缘、低清漆，避免"厚塑料片"）
   M.fin = new THREE.MeshPhysicalMaterial({
-    name: 'fin', color: 0x767e86, metalness: .5, roughness: .4,
-    clearcoat: .28, clearcoatRoughness: .34, envMapIntensity: 1.1, side: THREE.DoubleSide,
+    name: 'fin', color: 0x3d4956, metalness: .6, roughness: .34,
+    clearcoat: .4, clearcoatRoughness: .3, envMapIntensity: 1.15, side: THREE.DoubleSide,
   });
-  M.steel = new THREE.MeshStandardMaterial({ name: 'steel', color: 0xaebccb, metalness: .85, roughness: .3, side: THREE.DoubleSide });
-  M.steelDark = new THREE.MeshStandardMaterial({ name: 'steelDark', color: 0x232a33, metalness: .7, roughness: .45, side: THREE.DoubleSide });
-  M.panel = new THREE.MeshStandardMaterial({ name: 'panel', color: 0x39424e, metalness: .62, roughness: .42, side: THREE.DoubleSide });
-  M.accent = new THREE.MeshStandardMaterial({ name: 'accent', color: 0xffab3f, metalness: .3, roughness: .42, emissive: 0x593407, emissiveIntensity: .4 });
+  M.steel = new THREE.MeshStandardMaterial({ name: 'steel', color: 0xc6d6e2, metalness: .88, roughness: .28, side: THREE.DoubleSide });
+  M.steelDark = new THREE.MeshStandardMaterial({ name: 'steelDark', color: 0x141b23, metalness: .72, roughness: .42, side: THREE.DoubleSide });
+  M.panel = new THREE.MeshStandardMaterial({ name: 'panel', color: 0x2c3848, metalness: .65, roughness: .38, side: THREE.DoubleSide });
+  // 能量色带：青蓝自发光（科幻视觉锚点）
+  M.accent = new THREE.MeshStandardMaterial({ name: 'accent', color: 0x37d8ff, metalness: .35, roughness: .3, emissive: 0x0a5a70, emissiveIntensity: 1.1 });
   M.radomeGlass = new THREE.MeshPhysicalMaterial({ name: 'radomeGlass', color: 0x9fd8ef, metalness: .1, roughness: .08, clearcoat: 1, transparent: true, opacity: .55 });
   M.glass = new THREE.MeshPhysicalMaterial({ name: 'glass', color: 0x6fc7e8, metalness: .9, roughness: .1, clearcoat: 1 });
   M.grain = new THREE.MeshStandardMaterial({ name: 'grain', color: 0x9b8570, metalness: .02, roughness: .93, side: THREE.DoubleSide });
-  M.ablative = new THREE.MeshStandardMaterial({ name: 'ablative', color: 0x181c22, metalness: .25, roughness: .72, side: THREE.DoubleSide });
+  M.ablative = new THREE.MeshStandardMaterial({ name: 'ablative', color: 0x14181f, metalness: .28, roughness: .68, side: THREE.DoubleSide });
   M.copper = new THREE.MeshStandardMaterial({ name: 'copper', color: 0xc98b46, metalness: .95, roughness: .28 });
-  M.innerDark = new THREE.MeshStandardMaterial({ name: 'innerDark', color: 0x11161d, metalness: .35, roughness: .68, side: THREE.DoubleSide });
+  M.innerDark = new THREE.MeshStandardMaterial({ name: 'innerDark', color: 0x10151d, metalness: .38, roughness: .65, side: THREE.DoubleSide });
   M.pcboard = new THREE.MeshStandardMaterial({ name: 'pcboard', color: 0x2f6e4f, metalness: .15, roughness: .58, side: THREE.DoubleSide });
-  M.charge = new THREE.MeshStandardMaterial({ name: 'charge', color: 0xc9a86a, metalness: .05, roughness: .8 });
-  M.frag = new THREE.MeshStandardMaterial({ name: 'frag', color: 0x8f98a2, metalness: .9, roughness: .35 });
-  M.rubber = new THREE.MeshStandardMaterial({ name: 'rubber', color: 0x1a1e24, metalness: .1, roughness: .92 });
+  // 主装药：淡青"能量芯"（剖视/拆解时透出冷光）
+  M.charge = new THREE.MeshStandardMaterial({ name: 'charge', color: 0xcfeef7, metalness: .0, roughness: .5, emissive: 0x0d3a48, emissiveIntensity: .45 });
+  M.frag = new THREE.MeshStandardMaterial({ name: 'frag', color: 0x9fb2c0, metalness: .92, roughness: .32 });
+  M.rubber = new THREE.MeshStandardMaterial({ name: 'rubber', color: 0x14181e, metalness: .1, roughness: .92 });
   for (const k in M) if (!('envMapIntensity' in M[k])) M[k].envMapIntensity = 1.2;
   return M;
 }
@@ -512,7 +514,7 @@ function addSciFiDetails(root, mats, R) {
     const sp = spanOf(av), len = Math.max(sp.y1 - sp.y0, .05) * .78;
     const glowMat = new THREE.MeshStandardMaterial({
       name: 'energyLine', color: 0x0d2b3a, metalness: .2, roughness: .35,
-      emissive: 0x2ea8d8, emissiveIntensity: 2.4,
+      emissive: 0x3ae6ff, emissiveIntensity: 3.4,
     });
     for (let i = 0; i < 4; i++) {
       const a = i / 4 * Math.PI * 2 + Math.PI / 4;
@@ -573,7 +575,22 @@ function addSciFiDetails(root, mats, R) {
     });
   }
 
-  /* 4) 全弹通用：蒙皮散热槽（细密横向沟槽，近看才有的层次） */
+  /* 4) 喷管出口：高能等离子环（科幻视觉锚点，嵌在喷口外缘） */
+  const nz = byName['nozzle'];
+  if (nz) {
+    const sp = spanOf(nz);
+    const plasma = new THREE.MeshStandardMaterial({
+      name: 'plasmaRing', color: 0x0a1a24, metalness: .4, roughness: .3,
+      emissive: 0x2fd4ff, emissiveIntensity: 2.2,
+    });
+    for (let i = 0; i < 2; i++) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(sp.r * .96 + i * .03, .012, 10, 56), plasma);
+      ring.rotation.x = Math.PI / 2; ring.position.y = sp.y0 + .06 - i * .03;
+      nz.add(ring);
+    }
+  }
+
+  /* 5) 全弹通用：蒙皮散热槽（细密横向沟槽，近看才有的层次） */
   ['avionics', 'motor'].forEach(k => {
     const g = byName[k]; if (!g) return;
     const sp = spanOf(g);
@@ -954,7 +971,9 @@ export function buildMissile() {
       linkPos[i * 6 + 3] = _lk2.x; linkPos[i * 6 + 4] = _lk2.y; linkPos[i * 6 + 5] = _lk2.z;
     }
     linkGeo.attributes.position.needsUpdate = true;
-    linkMat.opacity = Math.min(e * 1.25, .5);
+    // 呼吸式脉冲：拆解时能量线一明一暗，配合"分解能量环"做科幻质感
+    const pulse = .72 + .28 * Math.sin(performance.now() * .005);
+    linkMat.opacity = Math.min(e * 1.6, .9) * pulse;
     links.visible = true;
   }
 

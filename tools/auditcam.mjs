@@ -76,11 +76,11 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
 
   if (mode === 'fpv') {
     camPos = add(add(mPos, mul(fwd, -L * .35)), mul(up, R * 2.4));
-    look = add(mPos, mul(fwd, P.ahead));
+    look = add(mPos, mul(fwd, L * .62));
     if (s.ph === 2 && shipPos) {
       const toShip = norm(sub(shipPos, mPos));
       const ld = norm(add(mul(toShip, .65), mul(fwd, .35)));
-      look = add(mPos, mul(ld, P.ahead));
+      look = add(mPos, mul(ld, L * 1.5));
     }
     camUp = up;
     fov = P.fov + clamp(spd / 1020, 0, 1) * 20;
@@ -93,18 +93,18 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
       : 1.05 + Math.sin(nowMs * .00016) * .42;
     const ca = Math.cos(azim), sa = Math.sin(azim);
     horiz = v3(horiz.x * ca - horiz.z * sa, 0, horiz.x * sa + horiz.z * ca);
-    const dist = (mode === 'cine' ? L * 1.9 : L * 1.4) * (1 + clamp(spd / 1100, 0, 1) * .35);
-    const hgt = mode === 'cine' ? L * .72 : L * .38;
+    const dist = (mode === 'cine' ? L * 1.9 : L * 1.5) * (1 + clamp(spd / 1100, 0, 1) * .22);
+    const hgt = mode === 'cine' ? L * .72 : L * .42;
     camPos = add(add(mPos, mul(horiz, dist)), mul(WORLD_UP, hgt));
     camPos.y = Math.max(camPos.y, 12);
     let fwdFlat = v3(fwd.x, 0, fwd.z);
     fwdFlat = dot(fwdFlat, fwdFlat) < 1e-12 ? v3(0, 0, 1) : norm(fwdFlat);
-    look = add(add(mPos, mul(fwdFlat, L * .30)), mul(WORLD_UP, hgt * .18));
+    look = add(add(mPos, mul(fwdFlat, L * .35)), mul(WORLD_UP, hgt * .16));
     if (s.ph === 2 && shipPos) {
       let ld = v3(shipPos.x - mPos.x, 0, shipPos.z - mPos.z);
       ld = dot(ld, ld) < 1e-12 ? fwdFlat : norm(ld);
       ld = norm(add(mul(ld, .55), mul(fwdFlat, .45)));
-      look = add(add(mPos, mul(ld, L * 1.2)), mul(WORLD_UP, hgt * .18));
+      look = add(add(mPos, mul(ld, L * 1.2)), mul(WORLD_UP, hgt * .16));
     }
     camUp = WORLD_UP;
     fov = P.fov;

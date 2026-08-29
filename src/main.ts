@@ -73,12 +73,14 @@ let viewer, M, plumeHangar;
 let flyMissile = null, plumeWorld = null, shipMesh = null, losLine = null, predictRing = null;
 let markerSprite = null, aimMark = null, planPath = null, trail = null, boom = null;
 let clipPlane = null;
+// 拆解特效：随爆炸度扩张的全息能量环（科技感"分解"提示）
+let decompRing = null;
 // 高亮 = 部件自发光（"透亮"），不是外部打光：材质/贴图/颜色都不覆盖，
 // 只是在本色基础上透出一层光，因此外观完整保留，仅用于区分"当前选中哪一件"。
 let hlMats = null;
 const HL_GLOW = new THREE.Color(0x9fe4ff);   // 冷白，贴合场景科技色
-const HL_MIX = .58;                          // 混入本色的比例：金属件留本色，深色件也亮得起来
-const HL_POWER = .60;                        // 自发光强度，克制，能分辨即可
+const HL_MIX = .52;                          // 混入本色的比例：金属件留本色，深色件也亮得起来
+const HL_POWER = .30;                        // 自发光强度：克制再克制，只让选中件"透"一点光，不遮外观
 const missionSim = new MissionSim();
 const HANGAR_Y = 5.15;
 
@@ -825,15 +827,17 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
   const L = missileLen(), r = missileRad();
   if (mode === 'fpv') {
     /* 骑在弹背：机位在弹体中后段上方。
-       不能再退到喷口处——那里正对羽流，画面会被火焰糊满、只剩一个尾端。 */
+       不能再退到喷口处——那里正对羽流，画面会被火焰糊满、只剩一个尾端。
+       视点盯住弹身前段（不再是几百米外的远处），弹体占满画面下半部，
+       既有"骑在上面"的速度感，又能看清弹身细节。 */
     _camGoalPos.copy(_mPos).addScaledVector(fwd, -L * .35).addScaledVector(up, r * 2.4);
-    _camGoalLook.copy(_mPos).addScaledVector(fwd, P.ahead);
+    _camGoalLook.copy(_mPos).addScaledVector(fwd, L * .62);
     // 末段：视线压向目标舰，让拦截过程保留在画面中央
     if (s.ph === 2 && shipMesh) {
       _toShip.copy(_sPos).sub(_mPos);
       if (_toShip.lengthSq() > 1) {
         _lookDir.copy(_toShip).normalize().lerp(fwd, .35).normalize();
-        _camGoalLook.copy(_mPos).addScaledVector(_lookDir, P.ahead);
+        _camGoalLook.copy(_mPos).addScaledVector(_lookDir, L * 1.5);
       }
     }
     _camGoalUp.copy(up);
@@ -857,9 +861,10 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     const ca = Math.cos(azim), sa = Math.sin(azim);
     const hx = _horiz.x, hz = _horiz.z;
     _horiz.set(hx * ca - hz * sa, 0, hx * sa + hz * ca);
-    // 距离/高度按弹长取：改世界放大倍率时构图自动跟随，且保证是"特写"
-    const dist = (mode === 'cine' ? L * 1.9 : L * 1.4) * (1 + clamp(spd / 1100, 0, 1) * .35);
-    const hgt = mode === 'cine' ? L * .72 : L * .38;
+    // 距离/高度按弹长取：改世界放大倍率时构图自动跟随，且保证是"特写"。
+    // 速度增长系数调小，避免"起飞 88% → 高速 39%"这种占比剧烈跳变。
+    const dist = (mode === 'cine' ? L * 1.9 : L * 1.5) * (1 + clamp(spd / 1100, 0, 1) * .22);
+    const hgt = mode === 'cine' ? L * .72 : L * .42;
     _camGoalPos.copy(_mPos).addScaledVector(_horiz, dist).addScaledVector(WORLD_UP, hgt);
     _camGoalPos.y = Math.max(_camGoalPos.y, 12);           // 地面兜底，杜绝钻地
 
@@ -869,7 +874,7 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
        也不能前引太远：视点推到弹前方几十米，弹体会被挤到画面边缘。现在只前引约 0.3 个弹长。 */
     _fwdFlat.set(fwd.x, 0, fwd.z);
     if (_fwdFlat.lengthSq() < 1e-6) _fwdFlat.set(0, 0, 1); else _fwdFlat.normalize();
-    _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, L * .30).addScaledVector(WORLD_UP, hgt * .18);
+    _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, L * .35).addScaledVector(WORLD_UP, hgt * .16);
     // 末段：视线偏向目标舰，弹与目标同框（同样取水平投影，避免俯冲时视线砸向海面）
     if (s.ph === 2 && shipMesh) {
       _toShip.copy(_sPos).sub(_mPos);
@@ -1043,6 +1048,7 @@ function drawTimeline() {
 function seekMission(tt) {
   const sm = missionSim.samples;
   if (!sm.length) return;
+  sfx.rocketOff(); sfx.windOff();     // 拖动时间轴=暂停飞行，立刻停掉常驻轰鸣/风噪
   const dur = sm[sm.length - 1].t;
   S.mt = clamp(tt, 0, dur);
   if (S.missionEnded && S.mt < dur) S.missionEnded = false;
@@ -1125,6 +1131,9 @@ function tickRange(dt) {
      原来这里直接 return，相机就冻在最后一帧，而跟拍机位此刻正在火球内部，
      画面先是黑掉、随后整个应用像卡死一样不再响应。 */
   if (!S.missionPlaying || S.missionEnded) {
+    // 命中/暂停后必须停声：windOn/rocketOn 是常驻循环节点，
+    // 播放分支一停，最后一次音量就永远挂着（"爆炸结束后一直有声音"的根因）。
+    sfx.rocketOff(); sfx.windOff();
     const sp = missionSim.sampleAt(Math.min(S.mt, missionDuration()));
     if (sp) camMissionTick(dt, sp);
     return;
@@ -1179,6 +1188,7 @@ const _pv2 = new THREE.Vector3(), _pv3 = new THREE.Vector3(), _pv4 = new THREE.V
 let _camAnchor = new THREE.Vector3(9000, 400, 2600);
 function camMissionTick(dt, s) {
   if (!flyMissile) return;
+  if (S.missionCam === 'free') return;            // 自由视角：完全交给 OrbitControls
   if (S.missionEnded) { aftermathCam(dt); return; }   // 命中后切战后环绕机位
   missionVelAt(s.t, _mVel);
   _mPos.set(s.px, s.py, s.pz);
@@ -1187,14 +1197,14 @@ function camMissionTick(dt, s) {
   let goalFov = _camFov, resp = 4.2;
 
   if (mode === 'global') {
-    // 全局：战区尺度缓慢环绕，交代完整弹道与弹目相对位置
+    // 全局：战区尺度环绕，交代完整弹道与弹目相对位置（转快一点、压得更低更近）
     const cx = missionSim.meta.range * 500;
-    const R = missionSim.meta.range * 340 + 3200;
-    const ang = performance.now() * .00004;
-    _camGoalPos.set(cx - Math.cos(ang) * R * .9, R * .58, Math.sin(ang) * R * .9);
-    _camGoalLook.set(cx, 5200, 0);
+    const R = missionSim.meta.range * 300 + 2400;
+    const ang = performance.now() * .000065;
+    _camGoalPos.set(cx - Math.cos(ang) * R * .9, R * .52, Math.sin(ang) * R * .9);
+    _camGoalLook.set(cx, 4700, 0);
     _camGoalUp.copy(WORLD_UP);
-    goalFov = 42; resp = 1.4;
+    goalFov = 44; resp = 1.4;
     if (markerSprite) { markerSprite.visible = true; markerSprite.position.set(s.px, s.py + 260, s.pz); }
     if (planPath) planPath.visible = true;
   } else {
@@ -1366,6 +1376,7 @@ function bindUI() {
   $('#pauseBtn').addEventListener('click', () => {
     S.missionPlaying = !S.missionPlaying; updatePauseBtn();
     $('#pauseBtn').textContent = S.missionPlaying ? '暂停' : '继续';
+    if (!S.missionPlaying) { sfx.rocketOff(); sfx.windOff(); }   // 暂停即停声
     const s = missionSim.sampleAt(S.mt); if (s) missionUIOnce(s);
   });
   $$('.spd-btn').forEach(b => b.addEventListener('click', () => {
@@ -1376,6 +1387,16 @@ function bindUI() {
     setMissionCam(b.dataset.cam);
     sfx.click();
   }));
+  // 跟拍中想自己转镜头：在 3D 画面上按住即交还 OrbitControls（切到"自由"）。
+  // 用 capture 阶段先于 OrbitControls 自己的 pointerdown 切换，这样本次手势立刻能转。
+  (function dragTakeover() {
+    const el = viewer.renderer.domElement;
+    el.addEventListener('pointerdown', () => {
+      if (S.station !== 'range' || S.missionCam === 'free' || S.showRunning) return;
+      if (!viewer.camAuto) return;          // 已交还则不管
+      setMissionCam('free');
+    }, { capture: true });
+  })();
   $('#missionReset').addEventListener('click', () => {
     stopShow(); enterRange(true);
     sfx.rocketOff(); sfx.windOff(); sfx.whoosh(false);
@@ -1504,6 +1525,17 @@ function applyCutaway() {
 /* ============================================================ */
 let lastT = performance.now();
 let _guardCount = 0;
+/** 拆解特效：能量环随爆炸度扩张 + 呼吸脉冲；能量线也保持呼吸 */
+function tickExplode() {
+  const e = S.explore;
+  if (!decompRing) return;
+  if (S.station !== 'assembly' || e <= .012) { decompRing.visible = false; return; }
+  decompRing.visible = true;
+  decompRing.scale.setScalar(1.2 + e * 2.2);
+  const pulse = .6 + .4 * Math.sin(performance.now() * .004);
+  decompRing.material.opacity = Math.min(e * 1.6, .75) * pulse;
+  decompRing.rotation.z += .0022;
+}
 /** 任何一帧里抛异常都会让 requestAnimationFrame 断掉、整个应用永久卡死。
     这里把 rAF 排在最前面，并逐个子系统隔离，单点出错只丢该模块，画面继续跑。 */
 function guardErr(tag, e) {
@@ -1516,6 +1548,7 @@ function loop() {
   lastT = now;
   try { tickBurn(dt); } catch (e) { guardErr('试车台', e); }
   try { tickRange(dt); } catch (e) { guardErr('靶场', e); }
+  try { tickExplode(); } catch (e) { guardErr('拆解特效', e); }
   try { plumeHangar.update(dt); } catch (e) { guardErr('机库羽流', e); }
   try { plumeWorld && plumeWorld.update(dt); } catch (e) { guardErr('飞行羽流', e); }
   try { boom && boom.update(dt); } catch (e) { guardErr('爆炸', e); }
@@ -1541,6 +1574,19 @@ async function boot() {
   viewer.renderer.localClippingEnabled = true;
 
   viewer.hangar.add(M.root);
+
+  // 拆解全息能量环：拆得越开、环越大越亮，呼吸式脉冲（见 tickExplode）
+  decompRing = new THREE.Mesh(
+    new THREE.RingGeometry(.94, 1.0, 96),
+    new THREE.MeshBasicMaterial({
+      color: 0x35e0ff, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+    })
+  );
+  decompRing.rotation.x = -Math.PI / 2;
+  decompRing.position.y = .07;
+  decompRing.visible = false;
+  viewer.hangar.add(decompRing);
 
   plumeHangar = new Plume(M.nozzleTip);
   plumeHangar.group.visible = false;
