@@ -69,7 +69,14 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   display:flex;justify-content:flex-start;align-items:flex-start;
   padding:22px 26px 0;pointer-events:none;
 }
-.title-block{max-width:560px;pointer-events:auto}
+.title-block{
+  max-width:560px;pointer-events:auto;
+  /* 玻璃面板底：任何场景背景（亮天空/星空/炉火）下文字都保持可读 */
+  background:linear-gradient(160deg,rgba(9,15,27,.78),rgba(6,11,20,.55));
+  border:1px solid rgba(146,176,214,.2);border-radius:10px;
+  padding:10px 14px;backdrop-filter:blur(8px);
+  box-shadow:0 8px 30px rgba(0,0,0,.35);
+}
 .plaque-mini{
   display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.32em;
   color:var(--amber);border:1px solid rgba(255,180,84,.4);
@@ -348,7 +355,11 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
   border:1px solid var(--line);background:rgba(9,15,27,.72);border-radius:4px;padding:4px 9px;
   backdrop-filter:blur(6px);
 }
-.credit{font-size:10px;color:rgba(91,112,140,.6);letter-spacing:.1em;font-family:var(--mono)}
+.credit{
+  font-size:10px;color:rgba(91,112,140,.6);letter-spacing:.1em;font-family:var(--mono);
+  background:rgba(9,15,27,.55);border:1px solid var(--line);border-radius:4px;
+  padding:3px 8px;backdrop-filter:blur(5px);
+}
 
 /* ---------- 章节切换提示 ---------- */
 .mode-flash{
@@ -356,7 +367,7 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
   z-index:30;pointer-events:none;opacity:0;text-align:center;transition:opacity .4s,transform .55s cubic-bezier(.2,.8,.3,1);
 }
 .mode-flash.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
-.mode-flash .mf-big{font-size:34px;font-weight:800;letter-spacing:.42em;text-indent:.42em;color:var(--ink);text-shadow:0 0 40px rgba(255,180,84,.35)}
+.mode-flash .mf-big{font-size:34px;font-weight:800;letter-spacing:.42em;text-indent:.42em;color:var(--ink);text-shadow:0 2px 18px rgba(3,7,14,.95),0 0 44px rgba(255,180,84,.35)}
 .mode-flash .mf-sub{margin-top:10px;font-family:var(--mono);font-size:11px;letter-spacing:.5em;text-indent:.5em;color:var(--amber)}
 .mode-flash .mf-rule{width:180px;height:1px;margin:14px auto 0;background:linear-gradient(90deg,transparent,var(--amber),transparent)}
 

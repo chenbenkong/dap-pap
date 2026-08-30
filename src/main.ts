@@ -399,6 +399,7 @@ function applyStation(key, opts: any = {}, changed = true) {
     setPanelTab('tele', '飞行遥测 · 全任务');
   } else {
     viewer.setWorldMode(false);
+    viewer.setHangarBackdrop && viewer.setHangarBackdrop(key === 'bench' ? 'bench' : 'assembly');
     updateStationCam(changed ? 1.05 : .55);
     setPanelTab('parts', key === 'assembly' ? '部件档案 · 整弹视图' : '部件档案 · 试车台');
   }

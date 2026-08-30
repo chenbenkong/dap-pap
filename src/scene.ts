@@ -84,7 +84,62 @@ export function createScene(container) {
 
   /* ================= 机库展台 ================= */
   const hangar = new THREE.Group(); hangar.visible = true; scene.add(hangar);
+  let hDomeMat: any = null;          // 穹顶材质（函数级：setHangarBackdrop 需要）
+  let ASSEMBLY_TEX: any = null, BENCH_TEX: any = null;
   {
+    /* 背景穹顶：按工位切换风格化贴图（科幻风，不必写实）
+       装配台 = 星空实验室（靛紫星云 + 星点 + 中心柔光）
+       试车台 = 熔炉试车舱（炭黑 → 炉火橙红 + 火星 + 蒸汽带） */
+    const domeW = 1024, domeH = 512;
+    const mkDome = (draw) => {
+      const cv = document.createElement('canvas'); cv.width = domeW; cv.height = domeH;
+      const c = cv.getContext('2d');
+      draw(c);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    };
+    ASSEMBLY_TEX = mkDome((c) => {
+      const g = c.createLinearGradient(0, 0, 0, domeH);
+      g.addColorStop(0, '#0c0920'); g.addColorStop(.5, '#241b4d'); g.addColorStop(.82, '#4b2f74'); g.addColorStop(1, '#14102c');
+      c.fillStyle = g; c.fillRect(0, 0, domeW, domeH);
+      const neb = (x, y, r, col) => {
+        const rg = c.createRadialGradient(x, y, 0, x, y, r);
+        rg.addColorStop(0, col); rg.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = rg; c.fillRect(x - r, y - r, r * 2, r * 2);
+      };
+      neb(domeW * .2, domeH * .42, 190, 'rgba(120,90,255,.20)');
+      neb(domeW * .75, domeH * .30, 240, 'rgba(60,190,255,.14)');
+      neb(domeW * .55, domeH * .62, 170, 'rgba(255,120,220,.10)');
+      for (let i = 0; i < 320; i++) {
+        const x = Math.random() * domeW, y = Math.random() * domeH * .9, r = Math.random();
+        c.fillStyle = r > .97 ? 'rgba(255,255,255,.95)' : `rgba(255,255,255,${.18 + Math.random() * .5})`;
+        c.beginPath(); c.arc(x, y, r > .97 ? 1.6 : .7, 0, 7); c.fill();
+      }
+      const gl = c.createRadialGradient(domeW * .5, domeH * .66, 0, domeW * .5, domeH * .66, 260);
+      gl.addColorStop(0, 'rgba(150,190,255,.16)'); gl.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = gl; c.fillRect(0, 0, domeW, domeH);
+    });
+    BENCH_TEX = mkDome((c) => {
+      const g = c.createLinearGradient(0, 0, 0, domeH);
+      g.addColorStop(0, '#120b07'); g.addColorStop(.6, '#2a1208'); g.addColorStop(.88, '#5a2410'); g.addColorStop(1, '#180b05');
+      c.fillStyle = g; c.fillRect(0, 0, domeW, domeH);
+      const fg = c.createRadialGradient(domeW * .5, domeH * .98, 0, domeW * .5, domeH * .98, 300);
+      fg.addColorStop(0, 'rgba(255,150,60,.34)'); fg.addColorStop(.5, 'rgba(255,90,30,.14)'); fg.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = fg; c.fillRect(0, 0, domeW, domeH);
+      for (let i = 0; i < 180; i++) {
+        const x = Math.random() * domeW, y = domeH * (.55 + Math.random() * .45);
+        c.fillStyle = `rgba(255,${120 + Math.random() * 120 | 0},40,${.25 + Math.random() * .5})`;
+        c.beginPath(); c.arc(x, y, .5 + Math.random() * 1.1, 0, 7); c.fill();
+      }
+      c.fillStyle = 'rgba(255,200,150,.05)';
+      for (let i = 0; i < 5; i++) { const y = Math.random() * domeH * .5; c.fillRect(0, y, domeW, 14 + Math.random() * 26); }
+    });
+    hDomeMat = new THREE.MeshBasicMaterial({ map: ASSEMBLY_TEX, side: THREE.BackSide, fog: false, depthWrite: false });
+    const hDome = new THREE.Mesh(new THREE.SphereGeometry(60, 40, 20), hDomeMat);
+    hDome.renderOrder = -8; hDome.name = 'hangarDome';
+    hangar.add(hDome);
+
     // 地盘：深色亚光混凝土/树脂地面，弱化高光，避免喧宾夺主
     const disc = new THREE.Mesh(
       new THREE.CircleGeometry(11, 96),
@@ -193,6 +248,18 @@ export function createScene(container) {
     skyGrad.addColorStop(.78, '#e8d9b8');
     skyGrad.addColorStop(1, '#c4b39a');
     sctx.fillStyle = skyGrad; sctx.fillRect(0, 0, skyW, skyH);
+    // 星点（高空）+ 星云色带（科幻晨光质感，不必写实）
+    sctx.fillStyle = 'rgba(255,255,255,.85)';
+    for (let i = 0; i < 90; i++) {
+      const sx = Math.random() * skyW, sy = Math.random() * skyH * .42;
+      sctx.beginPath(); sctx.arc(sx, sy, Math.random() > .96 ? 1.6 : .6, 0, 7); sctx.fill();
+    }
+    const nb1 = sctx.createRadialGradient(skyW * .78, skyH * .22, 0, skyW * .78, skyH * .22, 220);
+    nb1.addColorStop(0, 'rgba(90,190,255,.16)'); nb1.addColorStop(1, 'rgba(0,0,0,0)');
+    sctx.fillStyle = nb1; sctx.fillRect(skyW * .78 - 240, skyH * .22 - 240, 480, 480);
+    const nb2 = sctx.createRadialGradient(skyW * .14, skyH * .34, 0, skyW * .14, skyH * .34, 260);
+    nb2.addColorStop(0, 'rgba(210,130,255,.12)'); nb2.addColorStop(1, 'rgba(0,0,0,0)');
+    sctx.fillStyle = nb2; sctx.fillRect(skyW * .14 - 280, skyH * .34 - 280, 560, 560);
     // 太阳（方位与主光方向一致：世界方向 (6,9,5) → 球面 u≈0.11, v≈0.24）
     const su = .11 * skyW, sv = .24 * skyH;
     const sg = sctx.createRadialGradient(su, sv, 0, su, sv, 170);
@@ -415,6 +482,8 @@ export function createScene(container) {
     renderer, scene, camera, controls, hangar, world,
     flyCam, update, keyLight: key,
     setCamAuto, setCamRig,
+    /** 机库穹顶背景：装配台=星空实验室 / 试车台=熔炉试车舱 */
+    setHangarBackdrop(kind) { hDomeMat.map = kind === 'bench' ? BENCH_TEX : ASSEMBLY_TEX; hDomeMat.needsUpdate = true; },
     get camAuto() { return camAuto; },
     setWorldMode(on) {
       hangar.visible = !on; world.visible = !!on;
@@ -422,7 +491,7 @@ export function createScene(container) {
       // 机库=暗室：浓黑雾
       const fog = scene.fog as THREE.FogExp2;
       fog.density = on ? 0.000045 : 0.012;
-      fog.color.set(on ? 0xa9bfd2 : 0x04070d);
+      fog.color.set(on ? 0xd3c7b0 : 0x04070d);   // 世界=近海晨光暖霾（与地平线同色系）
       key.castShadow = !on;
       if (!on) { hemi.intensity = .55; rim.intensity = 1.15; }
       else { hemi.intensity = .45; rim.intensity = .6; }
