@@ -302,6 +302,7 @@ export function createScene(container) {
         camera.position.x += (Math.random() - .5) * s;
         camera.position.y += (Math.random() - .5) * s;
         camera.position.z += (Math.random() - .5) * s;
+        if (camera.position.y < 4) camera.position.y = 4;   // 兜底：抖动不许把相机抖进海面（黑屏元凶之一）
         shake.amp *= Math.exp(-dt * 4.2);
       }
       colorGradePass.material.uniforms['uTime'].value = performance.now() * 0.001;

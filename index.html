@@ -235,13 +235,13 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 
 /* ---------- 底部控制台 ---------- */
 .control-desk{
-  position:fixed;left:18px;bottom:18px;width:296px;z-index:10;
+  position:fixed;left:18px;bottom:18px;width:min(400px,calc(100vw - 36px));z-index:10;
   background:var(--panel);border:1px solid var(--line);border-radius:8px;
   backdrop-filter:blur(10px);box-shadow:0 14px 44px rgba(0,0,0,.45);
   transition:transform .35s cubic-bezier(.4,0,.2,1),opacity .3s;
 }
 .control-desk.closed{transform:translateY(calc(100% + 26px));opacity:0;pointer-events:none}
-.desk-wrap{max-height:min(58vh,480px);overflow-y:auto;padding:12px 14px 14px;scrollbar-width:thin;scrollbar-color:rgba(146,176,214,.25) transparent}
+.desk-wrap{max-height:min(58vh,480px);overflow-y:auto;overflow-x:hidden;padding:12px 14px 14px;scrollbar-width:thin;scrollbar-color:rgba(146,176,214,.25) transparent}
 .desk-wrap::-webkit-scrollbar{width:5px}
 .desk-wrap::-webkit-scrollbar-thumb{background:rgba(146,176,214,.22);border-radius:3px}
 .desk-group{margin-bottom:13px}
@@ -251,27 +251,28 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
   margin-bottom:8px;display:flex;align-items:center;gap:8px;
 }
 .desk-group h3::after{content:"";flex:1;height:1px;background:var(--line)}
-.row{display:flex;gap:6px;align-items:center}
+.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .slider-row{display:flex;align-items:center;gap:10px;margin:2px 0 4px}
 .slider-row>span{font-size:11.5px;color:var(--dim);flex:none;width:64px;letter-spacing:.05em}
 .slider-row em{font-style:normal;font-family:var(--mono);font-size:11px;color:var(--amber);width:52px;text-align:right;flex:none}
 .btn-primary{
-  flex:1;padding:9px 12px;border-radius:5px;font-size:13px;font-weight:700;letter-spacing:.14em;
+  flex:1;padding:8px 10px;border-radius:5px;font-size:12.5px;font-weight:700;letter-spacing:.08em;
   color:var(--bg0);background:linear-gradient(135deg,var(--amber),var(--amber-deep));
-  box-shadow:0 2px 16px rgba(255,150,60,.35);transition:.2s;
+  box-shadow:0 2px 16px rgba(255,150,60,.35);transition:.2s;white-space:nowrap;
 }
 .btn-primary:hover{filter:brightness(1.1)}
 .btn-primary.armed{background:linear-gradient(135deg,var(--red),#c33);color:#fff;animation:pulseArmed 1.1s infinite}
 @keyframes pulseArmed{50%{box-shadow:0 0 22px rgba(255,80,80,.6)}}
 .btn-ghost{
   flex:1;padding:7px 10px;border-radius:5px;font-size:12px;color:var(--dim);
-  border:1px solid var(--line-strong);transition:.2s;letter-spacing:.04em;
+  border:1px solid var(--line-strong);transition:.2s;letter-spacing:.04em;white-space:nowrap;
 }
 .btn-ghost:hover:not(:disabled){color:var(--ink);border-color:rgba(146,176,214,.5)}
 .btn-ghost:disabled{opacity:.32;cursor:not-allowed}
 .btn-toggle{
   flex:1;padding:7px 8px;border-radius:5px;font-size:12px;color:var(--dim);
   border:1px solid var(--line);background:rgba(146,176,214,.04);transition:.18s;letter-spacing:.04em;
+  white-space:nowrap;
 }
 .btn-toggle:hover{border-color:var(--line-strong);color:var(--ink)}
 .btn-toggle.on{color:var(--amber);border-color:rgba(255,180,84,.55);background:rgba(255,180,84,.1);box-shadow:inset 0 0 12px rgba(255,180,84,.08)}
@@ -280,6 +281,7 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 .state-chip{
   font-family:var(--mono);font-size:11px;padding:6px 11px;border-radius:4px;letter-spacing:.1em;
   border:1px solid var(--line);color:var(--dim);white-space:nowrap;transition:.3s;
+  flex:1 1 118px;text-align:center;   /* 换行时独占一行成状态横幅，不挤压按钮 */
 }
 .state-chip.burn{color:var(--amber);border-color:rgba(255,180,84,.5)}
 .state-chip.fly{color:var(--cyan);border-color:rgba(111,199,232,.5)}

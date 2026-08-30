@@ -436,7 +436,14 @@ function setPanelTab(tab, unitText) {
   $('#tabParts').style.display = tab === 'parts' ? '' : 'none';
   $('#tabTele').style.display = tab === 'tele' ? '' : 'none';
   if (unitText) $('#panelHeadUnit').textContent = unitText;
-  if (tab === 'tele') { teleTemplate(); S.missionChartsDirty = true; }
+  if (tab === 'tele') {
+    teleTemplate();
+    /* 重建模板后必须立刻重画图表：teleTemplate 换掉了旧 canvas，
+       而旧流程只在 enterRange 里画一次——那时模板还没重建（或面板还隐藏、
+       canvas 宽度为 0），画完即被换掉，之后无人重画 → 剖面图永远空白。 */
+    drawProfileChart(); drawLegend(); drawPNChart();
+    S.missionChartsDirty = false;
+  }
   else buildPartsCards();
   charts.pn = null;
 }
@@ -1081,7 +1088,9 @@ function syncRangeUI() {
   const ig = $('#igniteRangeBtn'), lb = $('#launchBtn');
   if (ig) {
     ig.disabled = ph !== 'ready';
-    ig.textContent = ph === 'ready' ? '点火' : '点火中…';
+    // 状态必须跟手：只有点火按下后才是"点火中…"，倒计时/飞行/命中都是"已点火"，
+    // 否则命中了按钮还停在"点火中…"，看起来像状态卡死（用户实测反馈）。
+    ig.textContent = ph === 'ready' ? '点火' : ph === 'ignition' ? '点火中…' : '已点火';
   }
   if (lb) {
     lb.classList.toggle('armed', ph === 'ignition' && S.igT >= IGN_T);
@@ -1379,8 +1388,12 @@ function tickRange(dt) {
     // 命中：在目标舰处起爆
     impactPoint(_impV);
     boom.fire(new THREE.Vector3(_impV.x, 16, _impV.z), 130);
-    // 震动按世界尺度给（米制，几十米外才看得出）
-    viewer.shakeAt(14);
+    // 震动按世界尺度给（米制，几十米外才看得出）——14m 会把相机抖进海面/舰体
+    viewer.shakeAt(8);
+    // 硬切到战后环绕机位：旧实现从弹着点近景一路 lerp 出来，
+    // 头 1~2 秒相机穿火球/舰体/水线，画面全黑（用户实测"命中后黑屏几秒"）。
+    // 爆炸瞬间直接切远景，跟拍语法上也更干净：爆→切→环绕。
+    _aftSnap = true;
     sfx.rocketOff(); sfx.windOff();
     sfx.explosion(1.15);
     _sfxBoomed = false; _sfxLocked = false;
@@ -1520,6 +1533,7 @@ function computeGlobalBox() {
   };
 }
 function resetGlobalBox() { _glb = null; }
+let _aftSnap = false;
 function aftermathCam(dt) {
   impactPoint(_aftC);
   _aftC.y = Math.max(_aftC.y, 40);
@@ -1528,11 +1542,20 @@ function aftermathCam(dt) {
   _camGoalPos.set(_aftC.x + Math.cos(ang) * R, _aftC.y + 230, _aftC.z + Math.sin(ang) * R);
   _camGoalLook.copy(_aftC);
   _camGoalUp.copy(WORLD_UP);
-  const k = 1 - Math.exp(-dt * 1.5);
-  _camNowPos.lerp(_camGoalPos, k);
-  _camNowLook.lerp(_camGoalLook, k);
-  _camNowUp.lerp(_camGoalUp, k).normalize();
-  _camFov += (42 - _camFov) * k;
+  if (_aftSnap) {
+    // 命中瞬间硬切到环绕机位，不做从近景 lerp 出来的过渡（会穿火球/舰体→黑屏）
+    _camNowPos.copy(_camGoalPos); _camNowLook.copy(_camGoalLook);
+    _camNowUp.copy(WORLD_UP); _camFov = 42;
+    _offNowPos.copy(_camGoalPos).sub(_mPos);
+    _offNowLook.copy(_camGoalLook).sub(_mPos);
+    _aftSnap = false;
+  } else {
+    const k = 1 - Math.exp(-dt * 1.5);
+    _camNowPos.lerp(_camGoalPos, k);
+    _camNowLook.lerp(_camGoalLook, k);
+    _camNowUp.lerp(_camGoalUp, k).normalize();
+    _camFov += (42 - _camFov) * k;
+  }
   viewer.setCamRig(_camNowPos, _camNowLook, _camNowUp, _camFov);
 }
 
