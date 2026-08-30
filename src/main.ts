@@ -716,6 +716,89 @@ function hideRangeFlight() {
   losLine && (losLine.visible = false);
   predictRing && (predictRing.visible = false);
   shipMesh && (shipMesh.visible = false);
+  hideDebris();
+}
+
+/* ============================================================
+   命中：目标舰炸成碎片
+   命中瞬间整艘舰被炸没（隐藏原舰体），56 块船体碎片沿舰长分布
+   向外飞散：近命中点飞得猛、远一点慢，带重力/空气阻力/翻滚，
+   落水后减速浮在海上直到淡出。叠加 Boom 火球 + 屏幕白闪，
+   构成"震撼一击"。
+   ============================================================ */
+let debris = null;
+function ensureDebris() {
+  if (debris) return debris;
+  const N = 56;
+  const meshes = [], vel = [], rot = [], life = [];
+  const matDark = new THREE.MeshStandardMaterial({ color: 0x3a4854, metalness: .5, roughness: .6 });
+  const matFire = new THREE.MeshStandardMaterial({ color: 0xff6a1e, emissive: 0xff4a10, emissiveIntensity: 2.2 });
+  for (let i = 0; i < N; i++) {
+    const s = 2.2 + Math.random() * 7;
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(s * (0.5 + Math.random()), s * (0.3 + Math.random()), s * (0.4 + Math.random())),
+      i % 5 === 0 ? matFire : matDark);
+    m.visible = false;
+    viewer.world.add(m);
+    meshes.push(m); vel.push(new THREE.Vector3()); rot.push(new THREE.Vector3()); life.push(0);
+  }
+  debris = { meshes, vel, rot, life };
+  return debris;
+}
+function hideDebris() {
+  const d = debris; if (!d) return;
+  for (const m of d.meshes) m.visible = false;
+}
+function spawnDebris() {
+  const d = ensureDebris(); if (!d) return;
+  if (shipMesh) shipMesh.visible = false;      // 目标舰被炸没 → 碎片取而代之
+  impactPoint(_impV);
+  for (let i = 0; i < d.meshes.length; i++) {
+    const m = d.meshes[i];
+    const ax = _impV.x + (Math.random() * 2 - 1) * 78 * (0.25 + Math.random() * .75);   // 沿舰长分布
+    const az = _impV.z + (Math.random() * 2 - 1) * 15;
+    const ay = 5 + Math.random() * 24;
+    m.position.set(ax, ay, az);
+    m.visible = true;
+    const dx = m.position.x - _impV.x, dz = m.position.z - _impV.z;
+    const dist = Math.max(Math.hypot(dx, dz), 1);
+    const boost = 250 * Math.exp(-dist / 55) + 26;          // 近处猛、远处弱
+    d.vel[i].set(
+      dx / dist * boost * (0.6 + Math.random() * .8),
+      36 + Math.random() * 95,
+      dz / dist * boost * (0.6 + Math.random() * .8));
+    d.rot[i].set((Math.random() - .5) * 7, (Math.random() - .5) * 7, (Math.random() - .5) * 7);
+    d.life[i] = 6.5 + Math.random() * 3.5;
+  }
+}
+function tickDebris(dt) {
+  const d = debris; if (!d) return;
+  for (let i = 0; i < d.meshes.length; i++) {
+    const m = d.meshes[i];
+    if (!m.visible) continue;
+    d.life[i] -= dt;
+    if (d.life[i] <= 0) { m.visible = false; continue; }
+    d.vel[i].y -= 9.8 * dt * 1.4;                            // 重力（略加重，落得快一点）
+    d.vel[i].multiplyScalar(1 - dt * .32);                   // 空气阻力
+    m.position.addScaledVector(d.vel[i], dt);
+    if (m.position.y <= 1.2) {                               // 落水：停住、浮着慢慢沉
+      m.position.y = 1.2;
+      d.vel[i].set(0, 0, 0);
+      m.rotation.x += d.rot[i].x * dt * .25;
+      m.position.y -= dt * 0.35;                             // 微微下沉
+      if (m.position.y < .3) { m.visible = false; d.life[i] = 0; }
+    } else {
+      m.rotation.x += d.rot[i].x * dt;
+      m.rotation.y += d.rot[i].y * dt;
+      m.rotation.z += d.rot[i].z * dt;
+    }
+  }
+}
+/* 命中瞬间的全屏白闪：极短 0.17s，给爆炸一击的"冲击感" */
+function flashScreen() {
+  const f = $('#boomFlash'); if (!f) return;
+  f.classList.add('on');
+  setTimeout(() => f.classList.remove('on'), 170);
 }
 
 /* ============================================================
@@ -926,16 +1009,18 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     const cine = mode === 'cine';
     const kLow = clamp(_mPos.y / 2600, 0, 1);   // 低空因子：起飞段压低机位做仰拍
     let dist: number, hgt: number, azC: number, azA: number, azF: number, fov: number;
-    /* 距离整体拉远（用户反馈"太近了，尤其末段"）：末段从 1.3~1.4L 放宽到
-       2.0~2.1L（约 90 m），整弹+目标舰同框，不糊脸；起飞段仍保留低角度仰拍。 */
+    /* 中远景构图（用户反馈"只看到导弹本体，看不到周围"）：
+       距离从 2.0~2.6L 进一步拉到 2.6~3.4L（末段约 110m、滑翔约 150m），
+       视场角从 36~44° 加宽到 46~50°——海面/发射台/弹道/目标舰全部入画，
+       导弹只占画面约三分之一，仍是清晰主体但不糊脸。 */
     if (cine) {
-      if (s.ph === 0)      { dist = L * (1.75 + .50 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 44 - 6 * kLow; }
-      else if (s.ph === 1) { dist = L * 2.40;                hgt = L * .95;                 azC = 1.02; azA = .42; azF = .00016; fov = 36; }
-      else                 { dist = L * 2.10;                hgt = L * .58;                 azC = .78;  azA = .22; azF = .0002;  fov = 40; }
+      if (s.ph === 0)      { dist = L * (2.20 + .40 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 50 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 3.40;                hgt = L * .90;                 azC = 1.02; azA = .42; azF = .00016; fov = 48; }
+      else                 { dist = L * 2.90;                hgt = L * .55;                 azC = .78;  azA = .22; azF = .0002;  fov = 46; }
     } else {
-      if (s.ph === 0)      { dist = L * (1.55 + .35 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fov = 44; }
-      else if (s.ph === 1) { dist = L * 2.20;                hgt = L * .70;                 azC = .70;  azA = .12; azF = .00009; fov = 40; }
-      else                 { dist = L * 2.00;                hgt = L * .50;                 azC = .58;  azA = .10; azF = .00011; fov = 44; }
+      if (s.ph === 0)      { dist = L * (2.00 + .30 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fov = 48; }
+      else if (s.ph === 1) { dist = L * 3.00;                hgt = L * .55;                 azC = .70;  azA = .12; azF = .00009; fov = 50; }
+      else                 { dist = L * 2.60;                hgt = L * .45;                 azC = .58;  azA = .10; azF = .00011; fov = 48; }
     }
     dist *= 1 + clamp(spd / 1100, 0, 1) * .18;   // 高速略拉远，占比不剧烈跳变
     const azim = azC + Math.sin(performance.now() * azF) * azA;
@@ -1267,6 +1352,7 @@ function seekMission(tt) {
     shipMesh.position.copy(_sPos);
     shipMesh.rotation.y = Math.atan2(-shipVelocity().z, shipVelocity().x);
     shipMesh.visible = true;
+    hideDebris();      // 时间轴回放 = 回到命中前，舰体还原、碎片收走
   }
   updateGuidance(s);
   updateHud(s);
@@ -1387,9 +1473,11 @@ function tickRange(dt) {
     // 已经炸了：收掉弹体与尾焰，别把它们留在火球里
     if (flyMissile) flyMissile.visible = false;
     if (plumeWorld) plumeWorld.setPower(0);
-    // 命中：在目标舰处起爆
+    // 命中：在目标舰处起爆——大号火球 + 目标舰炸成碎片 + 屏幕白闪
     impactPoint(_impV);
-    boom.fire(new THREE.Vector3(_impV.x, 16, _impV.z), 130);
+    boom.fire(new THREE.Vector3(_impV.x, 16, _impV.z), 190);
+    spawnDebris();
+    flashScreen();
     // 震动按世界尺度给（米制，几十米外才看得出）——14m 会把相机抖进海面/舰体
     viewer.shakeAt(8);
     // 硬切到战后环绕机位：旧实现从弹着点近景一路 lerp 出来，
@@ -1572,8 +1660,8 @@ function syncRangeFill(inp) {
 /* ---------- 机位切换 ---------- */
 const CAM_HINT: any = {
   fpv: '第一人称：骑在弹背上，视野随速度张开，末段视线压向目标舰',
-  chase: '第三人称：侧后方约 33° 跟拍，中远景构图（约 80 m），末段弹目同框',
-  cine: '电影机位：中远景侧后环绕（约 90 m），整弹+弹道+目标都在画面里',
+  chase: '第三人称：侧后方约 33° 中远景跟拍（约 115 m），海面/弹道尽收眼底',
+  cine: '电影机位：中远景侧后环绕（约 130 m），整弹+弹道+目标都在画面里',
   global: '全局：战区尺度俯瞰完整弹道，菱形光标标出导弹位置',
   free: '自由：交还鼠标，可自由环绕观察（拖动旋转 / 滚轮缩放）',
 };
@@ -1843,6 +1931,7 @@ function loop() {
   try { plumeHangar.update(dt); } catch (e) { guardErr('机库羽流', e); }
   try { plumeWorld && plumeWorld.update(dt); } catch (e) { guardErr('飞行羽流', e); }
   try { boom && boom.update(dt); } catch (e) { guardErr('爆炸', e); }
+  try { tickDebris(dt); } catch (e) { guardErr('碎片', e); }
   try { updateLabels(dt); } catch (e) { guardErr('标注', e); }
   try { viewer.update(dt); } catch (e) { guardErr('渲染', e); }
 }

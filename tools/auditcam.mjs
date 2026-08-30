@@ -95,13 +95,13 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
     const kLow = clamp(mPos.y / 2600, 0, 1);
     let dist, hgt, azC, azA, azF, fovT;
     if (cine) {
-      if (s.ph === 0)      { dist = L * (1.75 + .50 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 44 - 6 * kLow; }
-      else if (s.ph === 1) { dist = L * 2.40;                hgt = L * .95;                 azC = 1.02; azA = .42; azF = .00016; fovT = 36; }
-      else                 { dist = L * 2.10;                hgt = L * .58;                 azC = .78;  azA = .22; azF = .0002;  fovT = 40; }
+      if (s.ph === 0)      { dist = L * (2.20 + .40 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 50 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 3.40;                hgt = L * .90;                 azC = 1.02; azA = .42; azF = .00016; fovT = 48; }
+      else                 { dist = L * 2.90;                hgt = L * .55;                 azC = .78;  azA = .22; azF = .0002;  fovT = 46; }
     } else {
-      if (s.ph === 0)      { dist = L * (1.55 + .35 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fovT = 44; }
-      else if (s.ph === 1) { dist = L * 2.20;                hgt = L * .70;                 azC = .70;  azA = .12; azF = .00009; fovT = 40; }
-      else                 { dist = L * 2.00;                hgt = L * .50;                 azC = .58;  azA = .10; azF = .00011; fovT = 44; }
+      if (s.ph === 0)      { dist = L * (2.00 + .30 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fovT = 48; }
+      else if (s.ph === 1) { dist = L * 3.00;                hgt = L * .55;                 azC = .70;  azA = .12; azF = .00009; fovT = 50; }
+      else                 { dist = L * 2.60;                hgt = L * .45;                 azC = .58;  azA = .10; azF = .00011; fovT = 48; }
     }
     dist *= 1 + clamp(spd / 1100, 0, 1) * .18;
     const azim = azC + Math.sin(nowMs * azF) * azA;
@@ -188,6 +188,9 @@ for (const mode of MODES) {
     const inFrame = pc.depth > 0 && Math.abs(pc.x) <= 1 && Math.abs(pc.y) <= 1;
     // 弹体投影长度占画面高度的比例（NDC 纵跨 2 = 整屏）
     const span = Math.hypot(pn.x - pt.x, pn.y - pt.y) / 2;
+    // 阶段感知占比门槛：助推/末段保证特写（≥25%）；滑翔段是刻意的大远景
+    // （看跳跃走廊+四周景物，用户明确要求"不要只看到导弹本体"），放宽到 ≥12%
+    const spanTh = s.ph === 1 ? 0.12 : 0.25;
     // 视线与弹轴夹角：越接近 0 越"正对弹尾"（只能看见尾部一个圆面）
     const viewDir = norm(sub(look, camPos));
     const endOnCos = Math.abs(dot(viewDir, fwd));
@@ -198,7 +201,7 @@ for (const mode of MODES) {
     if (mode !== 'fpv' && endOnCos > 0.92) bad.endOn.push(`${mode}@${t.toFixed(1)}s endOnCos=${endOnCos.toFixed(3)}`);
     if (mode !== 'fpv' && dist > 260) bad.tooFar.push(`${mode}@${t.toFixed(1)}s ${dist.toFixed(0)}m`);
     if (camPos.y < 5) bad.underGround.push(`${mode}@${t.toFixed(1)}s y=${camPos.y.toFixed(1)}`);
-    if (mode !== 'fpv' && span < 0.25) bad.tooSmall.push(`${mode}@${t.toFixed(1)}s 仅占 ${(span * 100).toFixed(0)}%`);
+    if (mode !== 'fpv' && span < spanTh) bad.tooSmall.push(`${mode}@${t.toFixed(1)}s 仅占 ${(span * 100).toFixed(0)}%`);
     if (mode === 'fpv' && fwdCos < .9) bad.fpvLook.push(`${mode}@${t.toFixed(1)}s cos=${fwdCos.toFixed(3)}`);
 
     console.log(`  ${mode.padEnd(6)} ${String(t.toFixed(1)).padStart(6)}  ${dist.toFixed(0).padStart(7)}  `
@@ -212,7 +215,7 @@ ok(bad.inFrame.length === 0, '全弹道弹体中心始终在画面内（fpv 导�
 ok(bad.endOn.length === 0, '跟拍机位不正对弹尾（能看见弹体侧影而非尾部圆面）', bad.endOn.slice(0, 3).join(', '));
 ok(bad.tooFar.length === 0, '跟拍距离在特写量级（< 260 m，不会被甩开）', bad.tooFar.slice(0, 3).join(', '));
 ok(bad.underGround.length === 0, '相机全程不钻地', bad.underGround.slice(0, 3).join(', '));
-ok(bad.tooSmall.length === 0, '弹体在画面中占比 ≥ 25%（是特写而不是小点）', bad.tooSmall.slice(0, 3).join(', '));
+ok(bad.tooSmall.length === 0, '弹体在画面中占比达标（助推/末段 ≥25% 特写；滑翔段 ≥12% 大远景）', bad.tooSmall.slice(0, 3).join(', '));
 ok(bad.fpvLook.length === 0, '第一人称是"机头朝前看"的导引头视角（视线沿弹轴前方）', bad.fpvLook.slice(0, 3).join(', '));
 
 /* ---------- 发射位姿审计：整弹必须完整立在台面上方 ---------- */

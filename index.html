@@ -368,6 +368,14 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 }
 .station-wipe.on{opacity:1}
 
+/* ---------- 命中白闪：爆炸一击的冲击感 ---------- */
+.boom-flash{
+  position:fixed;inset:0;z-index:70;pointer-events:none;opacity:0;
+  background:radial-gradient(ellipse at center,rgba(255,252,240,.98),rgba(255,214,140,.9));
+  transition:opacity .16s ease-out;
+}
+.boom-flash.on{opacity:.95}
+
 /* ---------- 加载屏 ---------- */
 #loader{
   position:fixed;inset:0;z-index:99;background:radial-gradient(1200px 700px at 50% 42%,#0a1424 0%,#04070d 62%);
@@ -561,6 +569,8 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 
 <!-- 工位转场压暗层 -->
 <div class="station-wipe" id="stationWipe"></div>
+<!-- 命中白闪 -->
+<div class="boom-flash" id="boomFlash"></div>
 
 <!-- 章节切换闪烁 -->
 <div class="mode-flash" id="modeFlash">
