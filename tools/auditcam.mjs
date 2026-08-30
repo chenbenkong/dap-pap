@@ -95,13 +95,13 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
     const kLow = clamp(mPos.y / 2600, 0, 1);
     let dist, hgt, azC, azA, azF, fovT;
     if (cine) {
-      if (s.ph === 0)      { dist = L * (1.45 + .45 * kLow); hgt = L * (-.42 + .58 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 44 - 6 * kLow; }
-      else if (s.ph === 1) { dist = L * 2.15;                hgt = L * .85;                 azC = 1.02; azA = .42; azF = .00016; fovT = 36; }
-      else                 { dist = L * 1.42;                hgt = L * .40;                 azC = .78;  azA = .22; azF = .0002;  fovT = 40; }
+      if (s.ph === 0)      { dist = L * (1.75 + .50 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 44 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 2.40;                hgt = L * .95;                 azC = 1.02; azA = .42; azF = .00016; fovT = 36; }
+      else                 { dist = L * 2.10;                hgt = L * .58;                 azC = .78;  azA = .22; azF = .0002;  fovT = 40; }
     } else {
-      if (s.ph === 0)      { dist = L * (1.30 + .30 * kLow); hgt = L * (-.30 + .44 * kLow); azC = .58;  azA = .10; azF = .00009; fovT = 44; }
-      else if (s.ph === 1) { dist = L * 1.85;                hgt = L * .55;                 azC = .58;  azA = .12; azF = .00009; fovT = 40; }
-      else                 { dist = L * 1.30;                hgt = L * .34;                 azC = .58;  azA = .10; azF = .00011; fovT = 44; }
+      if (s.ph === 0)      { dist = L * (1.55 + .35 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fovT = 44; }
+      else if (s.ph === 1) { dist = L * 2.20;                hgt = L * .70;                 azC = .70;  azA = .12; azF = .00009; fovT = 40; }
+      else                 { dist = L * 2.00;                hgt = L * .50;                 azC = .58;  azA = .10; azF = .00011; fovT = 44; }
     }
     dist *= 1 + clamp(spd / 1100, 0, 1) * .18;
     const azim = azC + Math.sin(nowMs * azF) * azA;

@@ -926,14 +926,16 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     const cine = mode === 'cine';
     const kLow = clamp(_mPos.y / 2600, 0, 1);   // 低空因子：起飞段压低机位做仰拍
     let dist: number, hgt: number, azC: number, azA: number, azF: number, fov: number;
+    /* 距离整体拉远（用户反馈"太近了，尤其末段"）：末段从 1.3~1.4L 放宽到
+       2.0~2.1L（约 90 m），整弹+目标舰同框，不糊脸；起飞段仍保留低角度仰拍。 */
     if (cine) {
-      if (s.ph === 0)      { dist = L * (1.45 + .45 * kLow); hgt = L * (-.42 + .58 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 44 - 6 * kLow; }
-      else if (s.ph === 1) { dist = L * 2.15;                hgt = L * .85;                 azC = 1.02; azA = .42; azF = .00016; fov = 36; }
-      else                 { dist = L * 1.42;                hgt = L * .40;                 azC = .78;  azA = .22; azF = .0002;  fov = 40; }
+      if (s.ph === 0)      { dist = L * (1.75 + .50 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 44 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 2.40;                hgt = L * .95;                 azC = 1.02; azA = .42; azF = .00016; fov = 36; }
+      else                 { dist = L * 2.10;                hgt = L * .58;                 azC = .78;  azA = .22; azF = .0002;  fov = 40; }
     } else {
-      if (s.ph === 0)      { dist = L * (1.30 + .30 * kLow); hgt = L * (-.30 + .44 * kLow); azC = .58;  azA = .10; azF = .00009; fov = 44; }
-      else if (s.ph === 1) { dist = L * 1.85;                hgt = L * .55;                 azC = .58;  azA = .12; azF = .00009; fov = 40; }
-      else                 { dist = L * 1.30;                hgt = L * .34;                 azC = .58;  azA = .10; azF = .00011; fov = 44; }
+      if (s.ph === 0)      { dist = L * (1.55 + .35 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fov = 44; }
+      else if (s.ph === 1) { dist = L * 2.20;                hgt = L * .70;                 azC = .70;  azA = .12; azF = .00009; fov = 40; }
+      else                 { dist = L * 2.00;                hgt = L * .50;                 azC = .58;  azA = .10; azF = .00011; fov = 44; }
     }
     dist *= 1 + clamp(spd / 1100, 0, 1) * .18;   // 高速略拉远，占比不剧烈跳变
     const azim = azC + Math.sin(performance.now() * azF) * azA;
@@ -1570,8 +1572,8 @@ function syncRangeFill(inp) {
 /* ---------- 机位切换 ---------- */
 const CAM_HINT: any = {
   fpv: '第一人称：骑在弹背上，视野随速度张开，末段视线压向目标舰',
-  chase: '第三人称：侧后方约 33° 跟拍，弹体以侧影入画、占画面四到九成',
-  cine: '电影机位：侧后方 36°~84° 缓慢环绕，交代弹目关系，不会摆到正对弹尾',
+  chase: '第三人称：侧后方约 33° 跟拍，中远景构图（约 80 m），末段弹目同框',
+  cine: '电影机位：中远景侧后环绕（约 90 m），整弹+弹道+目标都在画面里',
   global: '全局：战区尺度俯瞰完整弹道，菱形光标标出导弹位置',
   free: '自由：交还鼠标，可自由环绕观察（拖动旋转 / 滚轮缩放）',
 };
