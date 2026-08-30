@@ -156,13 +156,16 @@ export class MissionSim {
       skipOm: .38,          // 跳跃角频率 (rad/s) → 周期约 16.5 s
       glideLockRange: 4200, // 水平距离进入此值后转入末段俯冲
       glideMaxT: 52,        // 滑翔最多持续这么久
+      // 发射点：main.ts 按"弹尾停在发射架导轨上"反解后覆盖这两项。
+      // 默认值仅供无头自检/相机审计使用（不影响相对构图验证）。
+      x0: 0, y0: 4,
     };
   }
   /* 积分一次完整弹道 */
   launch() {
     const P = this.params, dt = this.dt;
     let t = 0, m = P.m0, burnLeft = P.burnT;
-    let pos = new THREE.Vector3(0, 4, 0), vel = new THREE.Vector3();
+    let pos = new THREE.Vector3(P.x0 || 0, P.y0 || 4, 0), vel = new THREE.Vector3();
     let phase = 0;                     // 0 助推 1 中段 2 末段 3 命中
     const S = this.samples = [];
     const push = (g, ph, gl = 0) => S.push({

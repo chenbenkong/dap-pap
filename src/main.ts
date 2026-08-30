@@ -69,6 +69,26 @@ const S: any = {
    ============================================================ */
 const MISSILE_WORLD_SCALE = 5.5;   // 飞行世界放大倍率：弹体更大、跟拍时细节更清楚
 
+/* ---------- 发射位姿（单一事实来源） ----------
+   弹体放大 5.5× 后全长约 37 m。旧实现把弹根放在 (0,4,0)——那是按真实尺寸
+   定的起点，放大后喷管以下约 20 m 全部埋进发射台和地下，观感就是
+   "发射时只能看到前半截弹体"。这里按发射架轴线反解弹根位置：
+   轴线过 (0, RAIL_THRU_Y)、仰角 79°，令喷管底面恰好停在台面上方 0.8 m，
+   整弹完整立在发射架上；scene.ts 的夹持/脐带臂也按同一位姿摆放。 */
+const NOZZLE_LOCAL_Y = -3.7;               // parts.ts 喷管底面的局部 y
+const PAD_ELEV = 79 * DEG;
+const PAD_DIR = new THREE.Vector3(Math.cos(PAD_ELEV), Math.sin(PAD_ELEV), 0);
+const RAIL_THRU_Y = 11;                    // 导轨轴线经过点的高度（scene.ts 导轨中心）
+const DECK_Y = 7;                          // 发射台台面高度（scene.ts 基座顶）
+const PAD_TAIL_CLEAR = .8;                 // 喷管底面离台面的间隙
+const _padRest = new THREE.Vector3();
+function padRestPos(out: any) {
+  const tailDrop = -NOZZLE_LOCAL_Y * MISSILE_WORLD_SCALE;   // 弹根→喷管底的轴向距离
+  // root = (0, RAIL_THRU_Y) + t·PAD_DIR，且 root.y − tailDrop·PAD_DIR.y = 台面 + 间隙
+  const t = (DECK_Y + PAD_TAIL_CLEAR - RAIL_THRU_Y + tailDrop * PAD_DIR.y) / PAD_DIR.y;
+  return out.set(t * PAD_DIR.x, RAIL_THRU_Y + t * PAD_DIR.y, 0);
+}
+
 /* ============================================================ */
 /*                   场景与模型装配                               */
 /* ============================================================ */
@@ -828,9 +848,9 @@ function findFinDirs(clonedRoot) {
    ============================================================ */
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const CAM_PRESET: any = {
-  fpv:   { dist: 0,  hgt: 0,  ahead: 420, fov: 72, resp: 9.0, label: '第一人称' },
-  chase: { dist: 55, hgt: 15, ahead: 34,  fov: 42, resp: 4.2, label: '第三人称' },
-  cine:  { dist: 96, hgt: 32, ahead: 50,  fov: 38, resp: 2.6, label: '电影机位' },
+  fpv:   { fov: 72, resp: 9.0, label: '第一人称' },
+  chase: { fov: 42, resp: 4.2, label: '第三人称' },   // fov 仅为兜底，实际由分段镜头表给出
+  cine:  { fov: 38, resp: 2.6, label: '电影机位' },
 };
 const _camGoalPos = new THREE.Vector3(), _camGoalLook = new THREE.Vector3();
 const _camNowPos = new THREE.Vector3(), _camNowLook = new THREE.Vector3();
@@ -861,7 +881,10 @@ function basisFromVel(vel, outFwd, outRight, outUp) {
   return spd;
 }
 
-/** 计算某一模式在当前时刻的理想机位，写入 _camGoalPos / _camGoalLook / _camGoalUp，返回目标 FOV */
+/** 计算某一模式在当前时刻的理想机位，写入 _camGoalPos / _camGoalLook / _camGoalUp，返回目标 FOV
+    四视角统一采用「分段镜头语法」：按飞行阶段切换距离/高度/方位/视场，
+    起飞低空压低机位仰拍、滑翔拉远看"水漂"全景、末段推近看拦截——
+    过场由相对偏移平滑自然衔接，不会硬切。 */
 function calcCamGoal(mode, s, spd, fwd, right, up) {
   const P = CAM_PRESET[mode];
   const L = missileLen(), r = missileRad();
@@ -871,16 +894,19 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
        是"骑在弹头看前方"的第一人称，不是从后面看弹身。 */
     _camGoalPos.copy(_mPos).addScaledVector(fwd, L * .52).addScaledVector(up, r * .8);
     _camGoalLook.copy(_mPos).addScaledVector(fwd, L * 3);
-    // 末段：视线压向目标舰，让拦截过程保留在画面中央
+    let fov = P.fov + clamp(spd / 1020, 0, 1) * 20;        // 速度越快视野越广，增强速度感
+    // 末段：视线压向目标舰并把弹目距离"钉"在画面中央；
+    // 越接近目标视场越收窄（导引头截获后推近），拦截瞬间有"锁定放大"感
     if (s.ph === 2 && shipMesh) {
       _toShip.copy(_sPos).sub(_mPos);
       if (_toShip.lengthSq() > 1) {
         _lookDir.copy(_toShip).normalize().lerp(fwd, .35).normalize();
         _camGoalLook.copy(_mPos).addScaledVector(_lookDir, L * 1.5);
+        fov = 46 + clamp(_toShip.length() / 9000, 0, 1) * 26;
       }
     }
     _camGoalUp.copy(up);
-    return P.fov + clamp(spd / 1020, 0, 1) * 20;           // 速度越快视野越广，增强速度感
+    return fov;
   }
   if (mode === 'chase' || mode === 'cine') {
     // 水平后方向：把速度投影到水平面再取反，避免大俯仰角把相机甩到地下
@@ -888,29 +914,31 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     if (_horiz.lengthSq() < 1e-6) _horiz.set(0, 0, -1);
     _horiz.normalize();
     /* 关键：机位必须偏离弹尾轴线，绝不能正对弹尾！
-       正后方跟拍只能看见尾部一个圆截面，细长的弹体被自己完全挡住，
-       观感就是"很小、只看得见尾端"。这里固定偏到侧后方约 33°，
-       让弹体以侧影入画；电影机位再在其基础上缓慢环绕。 */
-    /* 摆动范围必须整体避开 0（弹尾轴线）：电影机位原来在 0.62±0.85 之间摆动，
-       摆到 azim≈0 时又变成正对弹尾，弹体只剩一个圆截面、占比掉到 11%。
-       现在让它在 26°~89° 之间环绕，全程都是侧影/四分之三视角。 */
-    const azim = mode === 'chase'
-      ? 0.58 + Math.sin(performance.now() * .00009) * .10
-      : 1.05 + Math.sin(performance.now() * .00016) * .42;
+       正后方跟拍只能看见尾部一个圆截面，细长的弹体被自己完全挡住。
+       各阶段方位角整体避开 0（弹尾轴线），全程都是侧影/四分之三视角。 */
+    const cine = mode === 'cine';
+    const kLow = clamp(_mPos.y / 2600, 0, 1);   // 低空因子：起飞段压低机位做仰拍
+    let dist: number, hgt: number, azC: number, azA: number, azF: number, fov: number;
+    if (cine) {
+      if (s.ph === 0)      { dist = L * (1.45 + .45 * kLow); hgt = L * (-.42 + .58 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 44 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 2.15;                hgt = L * .85;                 azC = 1.02; azA = .42; azF = .00016; fov = 36; }
+      else                 { dist = L * 1.42;                hgt = L * .40;                 azC = .78;  azA = .22; azF = .0002;  fov = 40; }
+    } else {
+      if (s.ph === 0)      { dist = L * (1.30 + .30 * kLow); hgt = L * (-.30 + .44 * kLow); azC = .58;  azA = .10; azF = .00009; fov = 44; }
+      else if (s.ph === 1) { dist = L * 1.85;                hgt = L * .55;                 azC = .58;  azA = .12; azF = .00009; fov = 40; }
+      else                 { dist = L * 1.30;                hgt = L * .34;                 azC = .58;  azA = .10; azF = .00011; fov = 44; }
+    }
+    dist *= 1 + clamp(spd / 1100, 0, 1) * .18;   // 高速略拉远，占比不剧烈跳变
+    const azim = azC + Math.sin(performance.now() * azF) * azA;
     const ca = Math.cos(azim), sa = Math.sin(azim);
     const hx = _horiz.x, hz = _horiz.z;
     _horiz.set(hx * ca - hz * sa, 0, hx * sa + hz * ca);
-    // 距离/高度按弹长取：改世界放大倍率时构图自动跟随，且保证是"特写"。
-    // 速度增长系数调小，避免"起飞 88% → 高速 39%"这种占比剧烈跳变。
-    const dist = (mode === 'cine' ? L * 1.9 : L * 1.5) * (1 + clamp(spd / 1100, 0, 1) * .22);
-    const hgt = mode === 'cine' ? L * .72 : L * .42;
     _camGoalPos.copy(_mPos).addScaledVector(_horiz, dist).addScaledVector(WORLD_UP, hgt);
     _camGoalPos.y = Math.max(_camGoalPos.y, 12);           // 地面兜底，杜绝钻地
 
     /* 视线锚点：沿「水平前方」略微前引，再微抬，让弹体稳定落在画面中部。
-       不能用 3D 速度方向前移——助推段速度上仰 60°~70°，前方几十米处会远高于弹体，
-       相机随之仰头，弹体被压到画面下缘之外（实测夹角 22.4° > 垂直半视角 21°，整个出画）。
-       也不能前引太远：视点推到弹前方几十米，弹体会被挤到画面边缘。现在只前引约 0.3 个弹长。 */
+       不能用 3D 速度方向前移——助推段速度上仰 60°~79°，前方几十米处会远高于弹体，
+       相机随之仰头，弹体被压到画面下缘之外。只前引约 0.35 个弹长。 */
     _fwdFlat.set(fwd.x, 0, fwd.z);
     if (_fwdFlat.lengthSq() < 1e-6) _fwdFlat.set(0, 0, 1); else _fwdFlat.normalize();
     _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, L * .35).addScaledVector(WORLD_UP, hgt * .16);
@@ -926,7 +954,7 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     }
     _camGoalUp.copy(WORLD_UP);
     void right;
-    return P.fov;
+    return fov;
   }
   return _camFov;
 }
@@ -981,7 +1009,10 @@ function enterRange(snap = true) {
   ensureRangeVisuals();       // 弹 / 羽流 / 目标舰 / 视线连线（由靶场统一持有）
   hideRangeFlight();
   aimMark.position.set(missionSim.params.aimX, 0, 0);
-  // 预积分
+  // 预积分：发射点按"弹尾停在导轨上"反解（见 padRestPos），整弹立在发射架上
+  padRestPos(_padRest);
+  missionSim.params.x0 = _padRest.x;
+  missionSim.params.y0 = _padRest.y;
   missionSim.launch();
   const Sm = missionSim.samples;
   // 目标舰就位：按“命中时刻抵达瞄准点”反推，末段一开始它就在正前方
@@ -1015,7 +1046,7 @@ function enterRange(snap = true) {
   flyMissile.visible = true;
   const s0 = Sm[0];
   flyMissile.position.set(s0.px, s0.py, s0.pz);
-  orientAlong(flyMissile, new THREE.Vector3(Math.cos(79 * DEG), Math.sin(79 * DEG), 0));
+  orientAlong(flyMissile, PAD_DIR);   // 立在发射架上：79° 仰角，与导轨同轴
   try { M.finAngle.call({ finDirs: findFinDirs(flyMissile) }, 0); } catch (_) {}
   plumeWorld && plumeWorld.setPower(0);
   markerSprite.visible = false;
@@ -1133,8 +1164,8 @@ function findPadHardware() {
 }
 function setPadHardware(open: number) {
   const p = findPadHardware(); if (!p) return;
-  if (p.clL) { p.clL.position.z = -1.6 - open * 2.8; p.clL.rotation.x = -open * .75; }
-  if (p.clR) { p.clR.position.z = 1.6 + open * 2.8; p.clR.rotation.x = open * .75; }
+  if (p.clL) { p.clL.position.z = -2.02 - open * 2.8; p.clL.rotation.x = -open * .75; }
+  if (p.clR) { p.clR.position.z = 2.02 + open * 2.8; p.clR.rotation.x = open * .75; }
   if (p.arm) {
     p.arm.rotation.y = (p.arm.userData.armBase || 0) + open * 1.05;
     p.arm.position.y = 10 - open * 2.2;      // 摆开并垮下
@@ -1398,13 +1429,19 @@ function camMissionTick(dt, s) {
     // 全局：按真实弹道范围缓慢环绕，交代完整弹道与弹目相对位置
     _glb = _glb || computeGlobalBox();
     const b = _glb;
-    const R = b.R * 1.6 + 700;
-    const ang = performance.now() * .00007;
-    _camGoalPos.set(b.cx - Math.cos(ang) * R * .9, b.cy + b.R * 1.45, b.cz + Math.sin(ang) * R * .9);
-    _camGoalLook.set(b.cx, b.cy, b.cz);
+    const R = b.R * 1.75 + 800;
+    const ang = performance.now() * .00006;
+    _camGoalPos.set(b.cx - Math.cos(ang) * R * .92, b.cy + b.R * 1.6, b.cz + Math.sin(ang) * R * .92);
+    // 视点在「弹道中心」与「导弹当前位置」之间取 28%：既能看全弹道，
+    // 又能一眼找到导弹本身（纯看包围盒中心时弹体小到难以定位）
+    _camGoalLook.set(b.cx, b.cy, b.cz).lerp(_mPos, .28);
     _camGoalUp.copy(WORLD_UP);
-    goalFov = 44; resp = 1.4;
-    if (markerSprite) { markerSprite.visible = true; markerSprite.position.set(s.px, s.py + 260, s.pz); }
+    goalFov = 46; resp = 1.4;
+    if (markerSprite) {
+      markerSprite.visible = true;
+      markerSprite.position.set(s.px, s.py + 300, s.pz);
+      markerSprite.scale.setScalar(1500);      // 战区尺度下光标要够大才找得到弹
+    }
     if (planPath) planPath.visible = true;
   } else {
     goalFov = calcCamGoal(mode, s, spd, _vhat, _cRight, _cUp);
@@ -1444,6 +1481,18 @@ function camMissionTick(dt, s) {
     _camNowLook.copy(_mPos).add(_offNowLook);
     _camNowUp.lerp(_camGoalUp, k).normalize();
     _camFov += (goalFov - _camFov) * k;
+  }
+  /* 第一人称气动抖振：直接加在最终机位上——若加在目标机位上，
+     会被上面的相对偏移平滑几乎完全滤掉，抖动等于没有。
+     幅值随速度上升（max-Q 附近最明显），助推段最强、滑翔/末段收敛为轻微颤动。 */
+  if (mode === 'fpv' && s) {
+    const q = clamp(spd / 900, 0, 1) * (s.ph === 0 ? 1 : .35);
+    if (q > .01) {
+      const tt = performance.now() * .001, a = missileLen() * .011 * q;
+      _camNowPos.x += Math.sin(tt * 43.7) * a;
+      _camNowPos.y += Math.sin(tt * 57.1 + 2.1) * a * .7;
+      _camNowPos.z += Math.sin(tt * 31.3 + 4.2) * a;
+    }
   }
   viewer.setCamRig(_camNowPos, _camNowLook, _camNowUp, _camFov);
 }

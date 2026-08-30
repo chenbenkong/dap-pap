@@ -70,7 +70,7 @@ function basisFromVel(vel) {
 }
 
 function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
-  const { spd, fwd, up } = basisFromVel(vel);
+  const { spd, fwd, right, up } = basisFromVel(vel);
   const P = CAM_PRESET[mode];
   let camPos, look, camUp, fov;
 
@@ -78,24 +78,35 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
     // 纯导引头视角：机位在弹头前端略上方、看向正前方（弹身完全在身后）
     camPos = add(add(mPos, mul(fwd, L * .52)), mul(up, R * .8));
     look = add(mPos, mul(fwd, L * 3));
+    fov = P.fov + clamp(spd / 1020, 0, 1) * 20;
     if (s.ph === 2 && shipPos) {
       const toShip = norm(sub(shipPos, mPos));
       const ld = norm(add(mul(toShip, .65), mul(fwd, .35)));
       look = add(mPos, mul(ld, L * 1.5));
+      fov = 46 + clamp(len(sub(shipPos, mPos)) / 9000, 0, 1) * 26;   // 末段导引头推近
     }
     camUp = up;
-    fov = P.fov + clamp(spd / 1020, 0, 1) * 20;
   } else {
     let horiz = v3(-fwd.x, 0, -fwd.z);
     if (dot(horiz, horiz) < 1e-12) horiz = v3(0, 0, -1);
     horiz = norm(horiz);
-    const azim = mode === 'chase'
-      ? 0.58 + Math.sin(nowMs * .00009) * .10
-      : 1.05 + Math.sin(nowMs * .00016) * .42;
+    // 分段镜头语法（与 main.ts calcCamGoal 保持一致）
+    const cine = mode === 'cine';
+    const kLow = clamp(mPos.y / 2600, 0, 1);
+    let dist, hgt, azC, azA, azF, fovT;
+    if (cine) {
+      if (s.ph === 0)      { dist = L * (1.45 + .45 * kLow); hgt = L * (-.42 + .58 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 44 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 2.15;                hgt = L * .85;                 azC = 1.02; azA = .42; azF = .00016; fovT = 36; }
+      else                 { dist = L * 1.42;                hgt = L * .40;                 azC = .78;  azA = .22; azF = .0002;  fovT = 40; }
+    } else {
+      if (s.ph === 0)      { dist = L * (1.30 + .30 * kLow); hgt = L * (-.30 + .44 * kLow); azC = .58;  azA = .10; azF = .00009; fovT = 44; }
+      else if (s.ph === 1) { dist = L * 1.85;                hgt = L * .55;                 azC = .58;  azA = .12; azF = .00009; fovT = 40; }
+      else                 { dist = L * 1.30;                hgt = L * .34;                 azC = .58;  azA = .10; azF = .00011; fovT = 44; }
+    }
+    dist *= 1 + clamp(spd / 1100, 0, 1) * .18;
+    const azim = azC + Math.sin(nowMs * azF) * azA;
     const ca = Math.cos(azim), sa = Math.sin(azim);
     horiz = v3(horiz.x * ca - horiz.z * sa, 0, horiz.x * sa + horiz.z * ca);
-    const dist = (mode === 'cine' ? L * 1.9 : L * 1.5) * (1 + clamp(spd / 1100, 0, 1) * .22);
-    const hgt = mode === 'cine' ? L * .72 : L * .42;
     camPos = add(add(mPos, mul(horiz, dist)), mul(WORLD_UP, hgt));
     camPos.y = Math.max(camPos.y, 12);
     let fwdFlat = v3(fwd.x, 0, fwd.z);
@@ -105,10 +116,10 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
       let ld = v3(shipPos.x - mPos.x, 0, shipPos.z - mPos.z);
       ld = dot(ld, ld) < 1e-12 ? fwdFlat : norm(ld);
       ld = norm(add(mul(ld, .55), mul(fwdFlat, .45)));
-      look = add(add(mPos, mul(ld, L * 1.2)), mul(WORLD_UP, hgt * .16));
+      look = add(add(mPos, mul(ld, L * 1.2)), mul(WORLD_UP, hgt * .18));
     }
     camUp = WORLD_UP;
-    fov = P.fov;
+    fov = fovT;
   }
   return { camPos, look, camUp, fov, fwd, spd };
 }
@@ -128,8 +139,21 @@ function project(p, camPos, look, camUp, fov) {
   return { x: dot(d, xAxis) / (depth * tanH), y: dot(d, yAxis) / (depth * tanV), depth };
 }
 
-/* ---------- 跑全弹道 ---------- */
+/* ---------- 发射位姿（与 main.ts padRestPos 保持一致） ----------
+   弹体放大后全长 ≈ 37 m，弹根必须立在发射架导轨上、喷管底面停在台面上方，
+   否则后半段弹体埋进发射台（"看不到后半段"的根因）。 */
+const NOZZLE_LOCAL_Y = -3.7;
+const PAD_ELEV = 79 * Math.PI / 180;
+const PAD_DIR = v3(Math.cos(PAD_ELEV), Math.sin(PAD_ELEV), 0);
+const RAIL_THRU_Y = 11, DECK_Y = 7, PAD_TAIL_CLEAR = .8;
+const _tailDrop = -NOZZLE_LOCAL_Y * MISSILE_WORLD_SCALE;
+const _t = (DECK_Y + PAD_TAIL_CLEAR - RAIL_THRU_Y + _tailDrop * PAD_DIR.y) / PAD_DIR.y;
+const PAD_ROOT = v3(_t * PAD_DIR.x, RAIL_THRU_Y + _t * PAD_DIR.y, 0);
+
+/* ---------- 跑全弹道（用与线上一致的发射位姿） ---------- */
 const ms = new MissionSim();
+ms.params.x0 = PAD_ROOT.x;
+ms.params.y0 = PAD_ROOT.y;
 ms.launch();
 const dur = ms.samples[ms.samples.length - 1].t;
 const velAt = (t) => {
@@ -190,6 +214,19 @@ ok(bad.tooFar.length === 0, '跟拍距离在特写量级（< 260 m，不会被�
 ok(bad.underGround.length === 0, '相机全程不钻地', bad.underGround.slice(0, 3).join(', '));
 ok(bad.tooSmall.length === 0, '弹体在画面中占比 ≥ 25%（是特写而不是小点）', bad.tooSmall.slice(0, 3).join(', '));
 ok(bad.fpvLook.length === 0, '第一人称是"机头朝前看"的导引头视角（视线沿弹轴前方）', bad.fpvLook.slice(0, 3).join(', '));
+
+/* ---------- 发射位姿审计：整弹必须完整立在台面上方 ---------- */
+head('发射位姿审计');
+const tailY = PAD_ROOT.y + NOZZLE_LOCAL_Y * MISSILE_WORLD_SCALE * PAD_DIR.y;
+const noseY = PAD_ROOT.y + 3.06 * MISSILE_WORLD_SCALE * PAD_DIR.y;
+const s0 = ms.samples[0];
+ok(Math.abs(s0.py - PAD_ROOT.y) < .5 && Math.abs(s0.px - PAD_ROOT.x) < .5,
+  '弹道起点 = 发射位姿（弹根落在导轨轴线上）',
+  `sim=(${s0.px.toFixed(2)}, ${s0.py.toFixed(2)}) / pad=(${PAD_ROOT.x.toFixed(2)}, ${PAD_ROOT.y.toFixed(2)})`);
+ok(tailY >= DECK_Y + .5, '喷管底面在台面上方（后半段不再埋进发射台）',
+  `尾 y=${tailY.toFixed(1)} vs 台面 ${DECK_Y}`);
+ok(noseY > tailY + MISSILE_LEN * MISSILE_WORLD_SCALE * .9,
+  '整弹立在发射架上（弹长完整可见）', `弹体 y 跨度 ${(tailY).toFixed(1)} → ${noseY.toFixed(1)}`);
 
 console.log(`\n结果  ${pass} 通过  ${fail} 失败\n`);
 process.exit(fail ? 1 : 0);

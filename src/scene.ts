@@ -228,19 +228,21 @@ export function createScene(container) {
       new THREE.MeshStandardMaterial({ color: 0xff5040, emissive: 0xff4030, emissiveIntensity: 2.6 }));
     beacon.position.set(-8, 16.6, 6.5); world.add(beacon);
     // 脐带臂：从脐带塔伸向弹体中段（供电/气液路），发射瞬间摆开脱离
-    // 塔顶(-8,*,6.5) → 弹轴上(≈1.2,10,0)，长度 ≈ 11.2，绕 Y 轴对准弹体
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(11.2, .7, 1.0), strutMat);
-    arm.position.set(-3.4, 10, 3.25);
-    arm.rotation.y = Math.atan2(0 - 6.5, 1.2 - (-8));      // ≈ -0.62 rad，指向弹体
+    // 弹体立于发射架上（root≈(3.26,27.8,0)，79° 仰角，半径≈1.32），
+    // 塔侧(-8,10,6.5) → 弹轴上(≈-0.2,10,0)，长度≈10.2，绕 Y 轴对准弹体
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(10.2, .7, 1.0), strutMat);
+    arm.position.set(-4.1, 10, 3.25);
+    arm.rotation.y = Math.atan2(-(0 - 6.5), -0.2 - (-8));  // ≈ .70 rad，指向弹轴
     arm.userData.armBase = arm.rotation.y;
     arm.name = 'towerArm';
     world.add(arm);
-    // 持垂夹持 ×2：点火时夹住弹体尾部承受推力（导弹不上飞），
+    // 持垂夹持 ×2：点火时夹住弹体发动机舱承受推力（导弹不上飞），
     // T-0 爆炸螺栓释放、向两侧张开——由 main 按名称驱动开合
+    // 位置取弹轴在 y≈10.5 处（发动机舱，台面上方），x≈-0.1、抱住半径1.32的弹体
     const clampMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2a, metalness: .62, roughness: .42 });
     for (const s of [-1, 1]) {
       const clamp = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.6, 1.4), clampMat);
-      clamp.position.set(-.7, 1.8, s * 1.6);   // 弹尾两侧（弹体世界半径 ≈1.3）
+      clamp.position.set(-.1, 10.5, s * 2.02);
       clamp.name = s < 0 ? 'padClampL' : 'padClampR';
       world.add(clamp);
     }
