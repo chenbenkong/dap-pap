@@ -1009,14 +1009,13 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     const cine = mode === 'cine';
     const kLow = clamp(_mPos.y / 2600, 0, 1);   // 低空因子：起飞段压低机位做仰拍
     let dist: number, hgt: number, azC: number, azA: number, azF: number, fov: number;
-    /* 中远景构图（用户反馈"只看到导弹本体，看不到周围"）：
-       距离从 2.0~2.6L 进一步拉到 2.6~3.4L（末段约 110m、滑翔约 150m），
-       视场角从 36~44° 加宽到 46~50°——海面/发射台/弹道/目标舰全部入画，
-       导弹只占画面约三分之一，仍是清晰主体但不糊脸。 */
+    /* 电影机位 = 远景：距离 2.8~4.0L（末段约 150m、滑翔约 175m）、FOV 50~52°，
+       导弹+弹道+目标舰+海面全在画面里，导弹约占画面 1/4；
+       第三人称 = 中景（76~135m），负责看清导弹本体。 */
     if (cine) {
-      if (s.ph === 0)      { dist = L * (2.20 + .40 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 50 - 6 * kLow; }
-      else if (s.ph === 1) { dist = L * 3.40;                hgt = L * .90;                 azC = 1.02; azA = .42; azF = .00016; fov = 48; }
-      else                 { dist = L * 2.90;                hgt = L * .55;                 azC = .78;  azA = .22; azF = .0002;  fov = 46; }
+      if (s.ph === 0)      { dist = L * (2.80 + .40 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fov = 52 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 4.00;                hgt = L * .95;                 azC = 1.02; azA = .42; azF = .00016; fov = 52; }
+      else                 { dist = L * 3.50;                hgt = L * .60;                 azC = .78;  azA = .22; azF = .0002;  fov = 50; }
     } else {
       if (s.ph === 0)      { dist = L * (2.00 + .30 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fov = 48; }
       else if (s.ph === 1) { dist = L * 3.00;                hgt = L * .55;                 azC = .70;  azA = .12; azF = .00009; fov = 50; }
@@ -1036,13 +1035,14 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
     _fwdFlat.set(fwd.x, 0, fwd.z);
     if (_fwdFlat.lengthSq() < 1e-6) _fwdFlat.set(0, 0, 1); else _fwdFlat.normalize();
     _camGoalLook.copy(_mPos).addScaledVector(_fwdFlat, L * .35).addScaledVector(WORLD_UP, hgt * .16);
-    // 末段：视线偏向目标舰，弹与目标同框（同样取水平投影，避免俯冲时视线砸向海面）
+    // 末段：视线偏向目标舰，弹与目标同框（同样取水平投影，避免俯冲时视线砸向海面）。
+    // 电影机位是远景，更要保证目标舰入画——视线更用力压向舰（.30），第三人称 .45。
     if (s.ph === 2 && shipMesh) {
       _toShip.copy(_sPos).sub(_mPos);
       if (_toShip.lengthSq() > 1) {
         _lookDir.set(_toShip.x, 0, _toShip.z);
         if (_lookDir.lengthSq() < 1e-6) _lookDir.copy(_fwdFlat); else _lookDir.normalize();
-        _lookDir.lerp(_fwdFlat, .45).normalize();
+        _lookDir.lerp(_fwdFlat, cine ? .30 : .45).normalize();
         _camGoalLook.copy(_mPos).addScaledVector(_lookDir, L * 1.2).addScaledVector(WORLD_UP, hgt * .18);
       }
     }
@@ -1489,6 +1489,9 @@ function tickRange(dt) {
     _sfxBoomed = false; _sfxLocked = false;
     if (losLine) losLine.visible = false;
     if (predictRing) predictRing.visible = false;
+    /* 必须 return！否则同一帧继续往下走会把 flyMissile / shipMesh 又设回可见——
+       舰体刚被 spawnDebris 隐藏就立刻复显，观感就是"爆炸后目标完好无损"。 */
+    return;
   }
   const s = missionSim.sampleAt(S.mt);
   flyMissile.visible = true;
@@ -1660,8 +1663,8 @@ function syncRangeFill(inp) {
 /* ---------- 机位切换 ---------- */
 const CAM_HINT: any = {
   fpv: '第一人称：骑在弹背上，视野随速度张开，末段视线压向目标舰',
-  chase: '第三人称：侧后方约 33° 中远景跟拍（约 115 m），海面/弹道尽收眼底',
-  cine: '电影机位：中远景侧后环绕（约 130 m），整弹+弹道+目标都在画面里',
+  chase: '第三人称：侧后方约 33° 中景跟拍（约 115 m），看清导弹本体',
+  cine: '电影机位：远景侧后环绕（约 150 m），导弹+弹道+目标舰+海面同框',
   global: '全局：战区尺度俯瞰完整弹道，菱形光标标出导弹位置',
   free: '自由：交还鼠标，可自由环绕观察（拖动旋转 / 滚轮缩放）',
 };

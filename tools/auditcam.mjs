@@ -95,9 +95,9 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
     const kLow = clamp(mPos.y / 2600, 0, 1);
     let dist, hgt, azC, azA, azF, fovT;
     if (cine) {
-      if (s.ph === 0)      { dist = L * (2.20 + .40 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 50 - 6 * kLow; }
-      else if (s.ph === 1) { dist = L * 3.40;                hgt = L * .90;                 azC = 1.02; azA = .42; azF = .00016; fovT = 48; }
-      else                 { dist = L * 2.90;                hgt = L * .55;                 azC = .78;  azA = .22; azF = .0002;  fovT = 46; }
+      if (s.ph === 0)      { dist = L * (2.80 + .40 * kLow); hgt = L * (-.42 + .62 * kLow); azC = 1.15; azA = .30; azF = .00013; fovT = 52 - 6 * kLow; }
+      else if (s.ph === 1) { dist = L * 4.00;                hgt = L * .95;                 azC = 1.02; azA = .42; azF = .00016; fovT = 52; }
+      else                 { dist = L * 3.50;                hgt = L * .60;                 azC = .78;  azA = .22; azF = .0002;  fovT = 50; }
     } else {
       if (s.ph === 0)      { dist = L * (2.00 + .30 * kLow); hgt = L * (-.30 + .50 * kLow); azC = .58;  azA = .10; azF = .00009; fovT = 48; }
       else if (s.ph === 1) { dist = L * 3.00;                hgt = L * .55;                 azC = .70;  azA = .12; azF = .00009; fovT = 50; }
@@ -115,7 +115,8 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
     if (s.ph === 2 && shipPos) {
       let ld = v3(shipPos.x - mPos.x, 0, shipPos.z - mPos.z);
       ld = dot(ld, ld) < 1e-12 ? fwdFlat : norm(ld);
-      ld = norm(add(mul(ld, .55), mul(fwdFlat, .45)));
+      const bias = cine ? .30 : .45;                    // 电影机位更用力看向目标舰
+      ld = norm(add(mul(ld, 1 - bias), mul(fwdFlat, bias)));
       look = add(add(mPos, mul(ld, L * 1.2)), mul(WORLD_UP, hgt * .18));
     }
     camUp = WORLD_UP;
@@ -188,9 +189,9 @@ for (const mode of MODES) {
     const inFrame = pc.depth > 0 && Math.abs(pc.x) <= 1 && Math.abs(pc.y) <= 1;
     // 弹体投影长度占画面高度的比例（NDC 纵跨 2 = 整屏）
     const span = Math.hypot(pn.x - pt.x, pn.y - pt.y) / 2;
-    // 阶段感知占比门槛：助推/末段保证特写（≥25%）；滑翔段是刻意的大远景
-    // （看跳跃走廊+四周景物，用户明确要求"不要只看到导弹本体"），放宽到 ≥12%
-    const spanTh = s.ph === 1 ? 0.12 : 0.25;
+    // 阶段感知占比门槛：电影机位是刻意的远景（导弹+目标+海面同框）→ 全阶段 ≥12%；
+    // 第三人称 助推/末段保证特写 ≥25%，滑翔段大远景 ≥12%。
+    const spanTh = mode === 'cine' ? 0.12 : (s.ph === 1 ? 0.12 : 0.25);
     // 视线与弹轴夹角：越接近 0 越"正对弹尾"（只能看见尾部一个圆面）
     const viewDir = norm(sub(look, camPos));
     const endOnCos = Math.abs(dot(viewDir, fwd));
