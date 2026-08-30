@@ -358,6 +358,14 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 .mode-flash .mf-sub{margin-top:10px;font-family:var(--mono);font-size:11px;letter-spacing:.5em;text-indent:.5em;color:var(--amber)}
 .mode-flash .mf-rule{width:180px;height:1px;margin:14px auto 0;background:linear-gradient(90deg,transparent,var(--amber),transparent)}
 
+/* ---------- 工位转场压暗层：消除"硬切"生硬感 ---------- */
+.station-wipe{
+  position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;
+  background:radial-gradient(1200px 700px at 50% 45%,rgba(7,13,24,.94),rgba(3,6,11,.99));
+  transition:opacity .34s ease;
+}
+.station-wipe.on{opacity:1}
+
 /* ---------- 加载屏 ---------- */
 #loader{
   position:fixed;inset:0;z-index:99;background:radial-gradient(1200px 700px at 50% 42%,#0a1424 0%,#04070d 62%);
@@ -412,7 +420,7 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
         <button class="station-btn" data-station="bench"><b>试车台</b><small>TEST BENCH</small></button>
         <button class="station-btn" data-station="range"><b>靶场</b><small>RANGE</small></button>
       </div>
-      <button class="show-btn" id="fullShowBtn" title="自动播放：合拢 → 点火 → 发射 → 全弹道 → 命中">
+      <button class="show-btn" id="fullShowBtn" title="自动播放（全程靶场）：目标锁定 → 点火持垂 → 发射倒计时 → 全弹道 → 命中">
         <span class="tri">▶</span><span>全流程演示</span>
       </button>
       <button class="snd-btn on" id="sndBtn" title="音效开关：点火轰鸣 / 飞行破空 / 锁定告警 / 爆炸">
@@ -426,7 +434,7 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
 <!-- 飞行 HUD（仅靶场工位且任务开始后显示） -->
 <div class="flight-hud" id="flightHud">
   <div class="hud-top">
-    <span class="hud-phase" id="hudPhase">待发射</span>
+    <span class="hud-phase" id="hudPhase">待命</span>
     <b class="hud-t" id="hudT">T+00.0s</b>
   </div>
   <div class="hud-grid">
@@ -493,18 +501,21 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
       </div>
     </section>
 
-    <!-- 靶场：一条连续的任务时间轴（发射 → 助推 → 中段 → 末段导引 → 命中） -->
+    <!-- 靶场：两段式发射（点火持垂 → 倒计时离架）+ 一条连续的任务时间轴（助推 → 中段 → 末段导引 → 命中） -->
     <section class="desk-group" id="grpRange" style="display:none">
       <h3>靶场任务 MISSION</h3>
       <div class="row">
-        <button class="btn-primary" id="launchBtn">发射</button>
+        <button class="btn-primary" id="igniteRangeBtn" title="靶场独立点火：发动机在发射台上点火，导弹仍被夹持锁住（持垂）">点火</button>
+        <button class="btn-primary" id="launchBtn" disabled title="推力建立 100% 后解锁：倒计时 T-0 夹持释放、脐带脱落、离架">发射</button>
         <button class="btn-ghost" id="pauseBtn" disabled>暂停</button>
+        <span class="state-chip" id="rangeChip">待命 STANDBY</span>
         <div class="spd-group">
           <button class="spd-btn on" data-spd="1">×1</button>
           <button class="spd-btn" data-spd="2">×2</button>
           <button class="spd-btn" data-spd="4">×4</button>
         </div>
       </div>
+      <label class="slider-row" style="margin-top:8px" title="真实发射流程：点火后推力在发射台上逐步建立，达到 100% 并确认健康后才允许发射"><span>推力建立</span><input type="range" id="thrustBar" min="0" max="100" step="1" value="0" disabled><em id="thrustBarVal">0%</em></label>
       <div class="sim-timeline" id="timeline"><canvas id="timelineCv"></canvas></div>
       <div class="tl-caption"><span>T+00.0s</span><span id="tlPhaseNow">待发射</span><span id="tlTimeRight">T+00.0s</span></div>
       <div class="row" style="margin-top:7px">
@@ -545,6 +556,9 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
   </div>
   <span class="credit">INTERACTIVE TEACHING AID · FOR EDUCATION ONLY · 数据为公开科普示意值</span>
 </div>
+
+<!-- 工位转场压暗层 -->
+<div class="station-wipe" id="stationWipe"></div>
 
 <!-- 章节切换闪烁 -->
 <div class="mode-flash" id="modeFlash">

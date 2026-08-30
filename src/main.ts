@@ -48,7 +48,10 @@ const S: any = {
   // 试车
   burning: false, clock: 0, BURN_T: 7.0, curProfile: 0, manualScrub: false,
   burnChart: [],
-  // 靶场任务
+  // 靶场任务（两段式发射：点火持垂 → 倒计时离架）
+  rangePhase: 'idle',     // idle / ready 待命 / ignition 点火持垂 / count 倒计时 / flight 飞行 / impact 命中
+  igT: 0,                 // 点火后推力建立计时
+  countT: 0,              // 发射倒计时剩余
   missionPlaying: false, mt: 0, spd: 1, missionEnded: false,
   missionChartsDirty: false,
   targetMove: false,      // 目标舰是否做规避机动
@@ -310,16 +313,30 @@ const STATIONS: any = {
   },
   range: {
     idx: 2, cn: '靶场', en: 'RANGE',
-    goal: '发射！一条时间轴走完 助推 → 惯性中段 → 末段导引 → 命中，末段自动画出视线连线。',
-    hintDrag: '镜头自动驾驶中', hintClick: '末段自动进入末端特写 · 可拖动时间轴回放',
+    goal: '两段式发射：先「点火」建立推力（导弹被夹持锁住），推力 100% 后「发射」——倒计时 T-0 释放夹持、脐带脱落、离架，走完 助推 → 滑翔 → 末段 → 命中。',
+    hintDrag: '镜头自动驾驶中', hintClick: '点火 → 发射两段式 · 可拖动时间轴回放',
   },
 };
 const STATION_ORDER = ['assembly', 'bench', 'range'];
 window.__focusPart = { key: null };
 
+/* 工位切换：先全屏压暗 → 中途换景 → 再揭开，消除"硬切"生硬感。
+   3D 场景切换涉及大量对象显隐/相机重定位，同一帧内硬切会闪一下；
+   压暗层遮住这一帧，视觉上变成一次平滑的"幕布转场"。 */
 function goStation(key, opts: any = {}) {
   if (!STATIONS[key]) key = 'assembly';
   const changed = key !== S.station;
+  if (!changed) { applyStation(key, opts, false); return; }
+  const w = $('#stationWipe');
+  if (!w) { applyStation(key, opts, true); return; }
+  w.classList.add('on');
+  setTimeout(() => {
+    applyStation(key, opts, true);
+    // 等 DOM 应用新状态后下一帧再揭开，避免揭开瞬间还看到旧场景
+    requestAnimationFrame(() => requestAnimationFrame(() => w.classList.remove('on')));
+  }, 340);
+}
+function applyStation(key, opts: any = {}, changed = true) {
   S.station = key;
   const C = STATIONS[key];
 
@@ -352,6 +369,11 @@ function goStation(key, opts: any = {}) {
     const ib = $('#igniteBtn');
     if (ib) { ib.textContent = '点火试车'; ib.classList.remove('armed'); }
   }
+  // 离开靶场：熄灭飞行羽流、中断点火/倒计时（回到靶场会重置为待命）
+  if (key !== 'range') {
+    plumeWorld && plumeWorld.setPower(0);
+    S.rangePhase = 'idle';
+  }
   if (key === 'range') {
     enterRange(opts.snap !== false);
     setPanelTab('tele', '飞行遥测 · 全任务');
@@ -380,11 +402,12 @@ function updateStationCam(dur = .55) {
     dur);
 }
 
-/* HUD 只在靶场工位、且任务已经开始后显示 */
+/* HUD 在靶场工位、任务开始后（含点火持垂 / 倒计时）显示 */
 function updateHudVisibility() {
   const hud = $('#flightHud');
   if (!hud) return;
-  const on = S.station === 'range' && (S.missionPlaying || S.mt > 0);
+  const on = S.station === 'range' &&
+    (S.missionPlaying || S.mt > 0 || S.rangePhase === 'ignition' || S.rangePhase === 'count');
   hud.classList.toggle('show', !!on);
 }
 
@@ -975,9 +998,11 @@ function enterRange(snap = true) {
   planPath.visible = true;
   trail.reset();
   S.missionEnded = false; S.mt = 0; S.missionPlaying = false;
+  S.rangePhase = 'ready'; S.igT = 0; S.countT = 0;
+  setPadHardware(0);          // 夹持闭合、脐带臂复位（回到待命）
   resetGlobalBox();
   updatePauseBtn();
-  chipLaunchIdle();
+  syncRangeUI();
   drawPlanMeta();
   // 进入靶场即由跟拍模块接管相机（默认电影机位，先给一帧待发全景）
   _camSnap = true;
@@ -998,21 +1023,134 @@ function enterRange(snap = true) {
   drawProfileChart(); drawLegend();
   updateHud(s0);
 }
-function chipLaunchIdle() {
-  chip($('#launchBtn'), '发射', '');     // btn-primary 自带样式即可
-  $('#launchBtn').textContent = '发射';
-  $('#launchBtn').disabled = false;
-  $('#pauseBtn').disabled = true;
-  $('#tlPhaseNow').textContent = '待发射';
+/* ============================================================
+   靶场 · 两段式发射状态机
+   ready 待命 → ignition 点火持垂（推力在发射台上建立，导弹被夹持锁住）
+   → count 发射倒计时（T-3…T-0）→ flight 离架飞行 → impact 命中
+   对应真实流程：点火 ≠ 发射。发动机点火后推力逐步建立、弹上健康确认，
+   夹持释放/脐带脱落后才离架（NASA 终端倒计时同款时序）。
+   ============================================================ */
+const IGN_T = 2.6;      // 点火 → 推力 100% 所需时间
+const COUNT_T = 3.2;    // 发射倒计时时长
+const PHASE_CHIP: any = {
+  ready: '待命 STANDBY',
+  ignition: '点火持垂 HOLD-DOWN',
+  count: '发射倒计时 COUNT',
+  flight: '飞行中 FLIGHT',
+  impact: '命中 IMPACT',
+};
+let _lastBeep = 9;
+function setThrustBar(v) {
+  const b = $('#thrustBar'); if (!b) return;
+  b.value = v * 100; b.style.setProperty('--fill', v * 100 + '%');
+  $('#thrustBarVal').textContent = Math.round(v * 100) + '%';
 }
+function syncRangeUI() {
+  const ph = S.rangePhase;
+  const ig = $('#igniteRangeBtn'), lb = $('#launchBtn');
+  if (ig) {
+    ig.disabled = ph !== 'ready';
+    ig.textContent = ph === 'ready' ? '点火' : '点火中…';
+  }
+  if (lb) {
+    lb.classList.toggle('armed', ph === 'ignition' && S.igT >= IGN_T);
+    if (ph === 'ready') { lb.textContent = '发射'; lb.disabled = true; }
+    else if (ph === 'ignition') { const ok = S.igT >= IGN_T; lb.textContent = ok ? '发射' : '推力建立中'; lb.disabled = !ok; }
+    else if (ph === 'count') { lb.textContent = '倒计时'; lb.disabled = true; }
+    else if (ph === 'flight') { lb.textContent = '飞行中'; lb.disabled = true; }
+    else if (ph === 'impact') { lb.textContent = '重新发射'; lb.disabled = false; }
+  }
+  $('#pauseBtn').disabled = !(ph === 'flight' && !S.missionEnded);
+  chip($('#rangeChip'), PHASE_CHIP[ph] || '待命 STANDBY', ph === 'flight' ? 'fly' : ph === 'impact' ? 'burn' : '');
+  if (ph !== 'ignition' && ph !== 'count') setThrustBar(ph === 'flight' || ph === 'impact' ? 1 : 0);
+  $('#tlPhaseNow').textContent = {
+    ready: '待命 · 目标已锁定',
+    ignition: '点火 · 推力建立中',
+    count: '发射倒计时',
+    flight: $('#tlPhaseNow').textContent,
+    impact: '命中',
+  }[ph] || '待命';
+}
+function rangeIgnite() {
+  if (S.station !== 'range' || S.rangePhase !== 'ready') return;
+  S.rangePhase = 'ignition'; S.igT = 0;
+  _lastBeep = 9;
+  sfx.ignition();
+  syncRangeUI();
+  $('#hudPhase').textContent = '点火 · 持垂';
+  _camSnap = true;      // 换一个发射台特写机位
+}
+function rangeArmLaunch() {
+  if (S.station !== 'range' || S.rangePhase !== 'ignition' || S.igT < IGN_T) return;
+  S.rangePhase = 'count'; S.countT = COUNT_T;
+  _lastBeep = Math.ceil(COUNT_T) + 1;
+  syncRangeUI();
+  $('#hudPhase').textContent = '发射倒计时';
+}
+function rangeCommitLiftoff() {
+  S.rangePhase = 'flight';
+  S.missionPlaying = true; S.missionEnded = false; S.mt = 0;
+  openPadHardware();          // T-0：爆炸螺栓释放夹持、脐带臂摆开脱落
+  sfx.whoosh(true);
+  viewer.shakeAt(6);
+  $('#pauseBtn').textContent = '暂停';
+  syncRangeUI();
+  updatePauseBtn(); updateHudVisibility();
+}
+function rangeReset() {
+  if (S.station !== 'range') return;
+  enterRange(true);           // 回到待命：熄火、弹体回位、夹持闭合
+  sfx.rocketOff(); sfx.windOff(); sfx.whoosh(false);
+}
+function rangeRelaunch() {
+  // 命中后的"重新发射"：复位 → 自动点火 → 推力建立后自动倒计时
+  rangeReset();
+  setTimeout(() => { if (S.station === 'range' && S.rangePhase === 'ready') rangeIgnite(); }, 1100);
+  setTimeout(() => { if (S.station === 'range' && S.rangePhase === 'ignition') rangeArmLaunch(); }, 1100 + (IGN_T + .5) * 1000);
+}
+function onLaunchClick() {
+  stopShow();
+  if (S.rangePhase === 'ready') {
+    chip($('#rangeChip'), '请先点火 IGNITE FIRST', 'burn');
+    sfx.click();
+    setTimeout(() => { if (S.rangePhase === 'ready') syncRangeUI(); }, 1600);
+    return;
+  }
+  if (S.rangePhase === 'ignition') { rangeArmLaunch(); return; }
+  if (S.rangePhase === 'impact') { rangeRelaunch(); return; }
+}
+/* ---------- 发射台硬件：持垂夹持 + 脐带臂 ---------- */
+let _padParts: any = null;
+function findPadHardware() {
+  if (_padParts) return _padParts;
+  const w = viewer.world;
+  _padParts = {
+    clL: w.getObjectByName('padClampL'),
+    clR: w.getObjectByName('padClampR'),
+    arm: w.getObjectByName('towerArm'),
+  };
+  return _padParts;
+}
+function setPadHardware(open: number) {
+  const p = findPadHardware(); if (!p) return;
+  if (p.clL) { p.clL.position.z = -1.6 - open * 2.8; p.clL.rotation.x = -open * .75; }
+  if (p.clR) { p.clR.position.z = 1.6 + open * 2.8; p.clR.rotation.x = open * .75; }
+  if (p.arm) {
+    p.arm.rotation.y = (p.arm.userData.armBase || 0) + open * 1.05;
+    p.arm.position.y = 10 - open * 2.2;      // 摆开并垮下
+  }
+}
+function openPadHardware() { setPadHardware(1); }
 function drawPlanMeta() {
   const m = missionSim.meta;
   const note = $('#msNote');
-  if (note) note.textContent = `射程 ${m.range.toFixed(1)} km · 弹道顶点 ${(m.apex / 1000).toFixed(1)} km · 最大 Ma ${m.maxMach.toFixed(1)} —— 按下发射看它走完。`;
+  if (note) note.textContent = `射程 ${m.range.toFixed(1)} km · 弹道顶点 ${(m.apex / 1000).toFixed(1)} km · 最大 Ma ${m.maxMach.toFixed(1)} —— 先「点火」建立推力，再「发射」解锁离架。`;
 }
 function updatePauseBtn() {
   $('#pauseBtn').textContent = S.missionPlaying ? '暂停' : '继续';
-  $('#pauseBtn').disabled = !S.missionPlaying && S.mt > 0 ? false : !S.missionPlaying;
+  // 只有真正进入过飞行（flight 且未命中）才允许暂停/继续；
+  // 待命/点火/倒计时阶段暂停毫无意义，还会绕过点火流程直接"起飞"。
+  $('#pauseBtn').disabled = S.rangePhase !== 'flight' || S.missionEnded;
 }
 
 /* ---------- 时间轴画布 ---------- */
@@ -1057,7 +1195,10 @@ function drawTimeline() {
     const fr = clamp((e.clientX - r.left) / r.width, 0, 1);
     seekMission(fr * missionSim.samples[missionSim.samples.length - 1].t);
   };
-  tl.addEventListener('pointerdown', e => { dragging = true; S.missionPlaying = false; updatePauseBtn(); setFrom(e); });
+  tl.addEventListener('pointerdown', e => {
+    if (S.rangePhase === 'ignition' || S.rangePhase === 'count') return;   // 点火/倒计时中禁止回拖
+    dragging = true; S.missionPlaying = false; updatePauseBtn(); setFrom(e);
+  });
   addEventListener('pointermove', e => dragging && setFrom(e));
   addEventListener('pointerup', () => dragging = false);
 })();
@@ -1087,7 +1228,7 @@ function seekMission(tt) {
   }
   updateGuidance(s);
   updateHud(s);
-  $('#launchBtn').textContent = S.missionEnded ? '重新发射' : '继续';
+  syncRangeUI();
   drawTimeline();
   missionUIOnce(s);
   updateHudVisibility();
@@ -1144,6 +1285,45 @@ function tickRange(dt) {
   if (S.station !== 'range') return;
   const sm = missionSim.samples;
   if (!sm.length) return;
+  /* —— 点火持垂：发动机在台上点火，推力逐步建立；导弹被夹持锁住不上飞。
+        真实流程对应：点火 → 推力上升 → 弹上健康确认（ thrust buildup / hold-down ）。 */
+  if (S.rangePhase === 'ignition') {
+    S.igT += dt;
+    const th = Math.min(S.igT / IGN_T, 1);
+    plumeWorld.setPower(th * .9);
+    sfx.rocketOn(.22 + .72 * th);
+    setThrustBar(th);
+    // 持垂高频微颤：推力顶着夹持，弹体在轨上抖
+    const s0 = sm[0], amp = .5 * th;
+    flyMissile.visible = true;
+    flyMissile.position.set(
+      s0.px + (Math.random() - .5) * amp,
+      s0.py + (Math.random() - .5) * amp * .5,
+      s0.pz + (Math.random() - .5) * amp);
+    $('#hudPhase').textContent = th >= 1 ? '点火 · 推力 100%' : '点火 · 推力建立中';
+    if (S.igT >= IGN_T) syncRangeUI();     // 推力满 → 发射按钮亮起（armed）
+    camMissionTick(dt, sm[0]);
+    return;
+  }
+  /* —— 发射倒计时：推力已 100%，倒计时结束爆炸螺栓释放、脐带脱落、离架 —— */
+  if (S.rangePhase === 'count') {
+    S.countT -= dt;
+    const c = Math.ceil(S.countT);
+    if (c < _lastBeep && c >= 0) { _lastBeep = c; sfx.blip(c === 0 ? 1500 : 980, .12, 'square', .16); }
+    $('#tlPhaseNow').textContent = S.countT > 0 ? `发射倒计时 T-${S.countT.toFixed(1)}s` : 'T-0 释放离架';
+    $('#hudPhase').textContent = '发射倒计时';
+    $('#hudT').textContent = 'T-' + Math.max(S.countT, 0).toFixed(1) + 's';
+    plumeWorld.setPower(.9); sfx.rocketOn(.95);
+    const s0 = sm[0], amp = .7;
+    flyMissile.visible = true;
+    flyMissile.position.set(
+      s0.px + (Math.random() - .5) * amp,
+      s0.py,
+      s0.pz + (Math.random() - .5) * amp);
+    if (S.countT <= 0) rangeCommitLiftoff();
+    camMissionTick(dt, sm[0]);
+    return;
+  }
   /* 命中之后 / 暂停时也必须继续驱动相机：
      原来这里直接 return，相机就冻在最后一帧，而跟拍机位此刻正在火球内部，
      画面先是黑掉、随后整个应用像卡死一样不再响应。 */
@@ -1159,8 +1339,9 @@ function tickRange(dt) {
   const dur = sm[sm.length - 1].t;
   if (S.mt >= dur) {
     S.mt = dur; S.missionPlaying = false; S.missionEnded = true;
+    S.rangePhase = 'impact';
+    syncRangeUI();
     updatePauseBtn();
-    $('#launchBtn').textContent = '重新发射';
     // 已经炸了：收掉弹体与尾焰，别把它们留在火球里
     if (flyMissile) flyMissile.visible = false;
     if (plumeWorld) plumeWorld.setPower(0);
@@ -1391,17 +1572,9 @@ function bindUI() {
   }));
   $('#fullShowBtn').addEventListener('click', () => S.showRunning ? stopShow() : runFullShow());
 
-  // 靶场任务
-  $('#launchBtn').addEventListener('click', function () { stopShow(); beginPlay(); });
-  function beginPlay() {
-    enterRange(false);              // 发射/重新发射: 一律重置并立即起飞
-    S.missionPlaying = true; S.missionEnded = false;
-    updatePauseBtn();
-    $('#launchBtn').textContent = '重新发射';
-    $('#pauseBtn').textContent = '暂停';
-    $('#pauseBtn').disabled = false;
-    updateHudVisibility();
-  }
+  // 靶场任务：两段式发射 —— 点火（持垂建推力）→ 发射（倒计时离架）
+  $('#igniteRangeBtn').addEventListener('click', () => { stopShow(); rangeIgnite(); });
+  $('#launchBtn').addEventListener('click', onLaunchClick);
   // 导引可视化开关
   $('#losBtn').addEventListener('click', function () { this.classList.toggle('on'); });
   $('#predictBtn').addEventListener('click', function () { this.classList.toggle('on'); });
@@ -1435,8 +1608,7 @@ function bindUI() {
     }, { capture: true });
   })();
   $('#missionReset').addEventListener('click', () => {
-    stopShow(); enterRange(true);
-    sfx.rocketOff(); sfx.windOff(); sfx.whoosh(false);
+    stopShow(); rangeReset();
   });
 
   // 音效开关
@@ -1470,7 +1642,11 @@ function bindUI() {
     else if (e.key === 'ArrowLeft') { stopShow(); goStation(STATION_ORDER[Math.max(i - 1, 0)]); }
     else if (e.code === 'Space') {
       e.preventDefault();
-      if (S.station === 'range') { stopShow(); $('#launchBtn').click(); }
+      if (S.station === 'range') {
+        stopShow();
+        if (S.rangePhase === 'ready') $('#igniteRangeBtn').click();   // 空格=点火
+        else $('#launchBtn').click();                                 // 已点火=发射/重新发射
+      }
       else if (S.station === 'bench') $('#igniteBtn').click();
     }
     else if (e.key.toLowerCase() === 'l') $('#labelBtn').click();
@@ -1510,23 +1686,22 @@ function runFullShow() {
     const tri = b.querySelector('.tri'); if (tri) tri.textContent = '■';
     const lbl = b.querySelector('span:last-child'); if (lbl) lbl.textContent = '演示中 · 点击停止';
   }
-  // ① 装配台：先把散开的舱段合拢
-  goStation('assembly', { snap: true });
-  animExplore(0);
-  // ② 试车台：等相机飞稳再点火，让 7.2s 的燃烧完整走完，不中途切走
+  // 全流程演示全程在靶场进行：目标锁定 → 点火持垂 → 发射倒计时 → 全弹道 → 命中
+  goStation('range', { snap: true });
+  // ① 目标锁定 / 诸元装订（真实流程第一步：火控向弹载计算机装定射击诸元）
   showStep(() => {
-    goStation('bench', { snap: true });
-    showStep(() => $('#igniteBtn').click(), 1200);
-  }, 2000);
-  // ③ 靶场：烧完（约 7.2s）后再进入，发射并走完整条钱学森弹道
-  showStep(() => {
-    goStation('range', { snap: true });
-    showStep(() => {
-      $('#launchBtn').click();
-      const dur = missionSim.samples.length ? missionSim.samples[missionSim.samples.length - 1].t : 60;
-      showStep(() => stopShow(), dur / S.spd * 1000 + 2600);
-    }, 1400);
-  }, 11200);
+    if (S.station !== 'range' || S.rangePhase !== 'ready') return;
+    chip($('#rangeChip'), '目标锁定 TARGET LOCK', 'fly');
+    $('#tlPhaseNow').textContent = '目标锁定 · 诸元装订';
+    sfx.lock();
+  }, 1900);
+  // ② 点火：发动机在发射台上点火，推力逐步建立（导弹仍被夹持锁住）
+  showStep(() => rangeIgnite(), 3900);
+  // ③ 推力 100% 并确认健康 → 进入发射倒计时，T-0 释放离架
+  showStep(() => rangeArmLaunch(), 3900 + (IGN_T + .5) * 1000);
+  // ④ 全弹道飞完（命中）后再收尾
+  const flightDur = missionSim.samples.length ? missionSim.samples[missionSim.samples.length - 1].t : 70;
+  showStep(() => stopShow(), 3900 + (IGN_T + .5) * 1000 + COUNT_T * 1000 + flightDur / S.spd * 1000 + 5600);
 }
 let exploreAnim = null;
 function animExplore(to) {
@@ -1692,7 +1867,14 @@ async function boot() {
 
   // 验证/演示：自动点火、发射、完整演示
   if (/[?&]ignite=1/.test(location.hash)) setTimeout(() => { goStation('bench'); setTimeout(() => $('#igniteBtn')?.click(), 600); }, 700);
-  if (/[?&]launch=1/.test(location.hash)) setTimeout(() => { goStation('range'); setTimeout(() => $('#launchBtn')?.click(), 600); }, 700);
+  if (/[?&]launch=1/.test(location.hash)) setTimeout(() => {
+    goStation('range');
+    // 两段式：进靶场 → 自动点火 → 推力建立后自动进入发射倒计时
+    setTimeout(() => {
+      rangeIgnite();
+      setTimeout(() => rangeArmLaunch(), (IGN_T + .6) * 1000);
+    }, 600);
+  }, 700);
   if (/[?&]show=1/.test(location.hash)) setTimeout(() => runFullShow(), 900);
   if (/[?&]debug=1/.test(location.hash)) setTimeout(dumpSceneStats, 2600);
   const ma = location.hash.match(/audit=([\d.,]+)/);
