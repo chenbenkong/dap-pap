@@ -631,7 +631,21 @@ function ensureRangeVisuals() {
     viewer.world.add(predictRing);
   }
   if (!flyMissile) {
+    /* 飞行弹必须是「合拢」状态，否则发射时会像「解体分开」。
+       克隆发生在开场动画期间（boot 里先 M.setExplode(1) 散开、420ms 后
+       再 animExplore(0) 合拢），而 ensureRangeVisuals() 在 boot 末尾同步执行，
+       此刻 M.root 还停在炸开(explore≈1)。若直接 clone，每个部件组的局部坐标
+       都带着散开的偏移，飞行弹就会带着炸开的舱段一起飞——观感正是"导弹解体"。
+       所以克隆前先把源弹压回应力合拢、克隆完再还原当前炸开度：飞行弹永远合拢。
+       顺带把材质也克隆成独立实例：靶场弹与装配台模型互不干扰，
+       装配台开剖视 / 高亮 / 试车喉衬发热都不会"漏"到飞行弹上。 */
+    const savedExplore = S.explore;
+    M.setExplode(0);
+    M.root.updateMatrixWorld(true);
     flyMissile = M.root.clone(true);
+    flyMissile.traverse(o => { if (o.isMesh && o.material) o.material = o.material.clone(); });
+    M.setExplode(savedExplore);
+    M.root.updateMatrixWorld(true);
     // 真实弹长约 5.9 m，放进 27 km 的靶场里跟拍时只占画面 8%，
     // 细节全糊掉。这里按教学可视化需要放大 2.6×（比例观感不变，本体看得清）。
     flyMissile.scale.setScalar(MISSILE_WORLD_SCALE);
