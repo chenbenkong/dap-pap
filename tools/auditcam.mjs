@@ -86,6 +86,7 @@ function calcCam(mode, mPos, s, vel, shipPos, nowMs) {
       fov = 46 + clamp(len(sub(shipPos, mPos)) / 9000, 0, 1) * 26;   // 末段导引头推近
     }
     camUp = up;
+    camPos.y = Math.max(camPos.y, 6);   // 导引头视角兜底（与 main.ts 一致）
   } else {
     let horiz = v3(-fwd.x, 0, -fwd.z);
     if (dot(horiz, horiz) < 1e-12) horiz = v3(0, 0, -1);

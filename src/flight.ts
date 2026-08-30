@@ -144,7 +144,10 @@ export class MissionSim {
     this.samples = [];
     this.meta = {};
     this.params = {
-      m0: 1680, thrust: 248e3, burnT: 7.2, mdot: 37,
+      m0: 1680, thrust: 248e3, burnT: 7.2, mdot: 97,
+      // 固体发动机真实比冲 ≈ 260 s（F / (mdot·g) = 248000 / (97×9.81) ≈ 260）。
+      // 数据自检：原 mdot=37 等效比冲 683s 远超固体火箭物理上限（240~280s），
+      // 且与试车台"燃气流量"读数（按 Isp≈238s 反推 ≈88~97kg/s）对不上。
       cd: .12, area: .21, pitch0: 70, pitchEnd: 30,
       lockAt: 17.5, aimX: 27200, nMax: 12,
       // —— 钱学森弹道 · 跳跃滑翔 ——

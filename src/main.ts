@@ -650,11 +650,12 @@ function tickBurn(dt) {
     sfx.rocketOff();
   }
 }
-let _thrustPeak = 206;   // kN 显示基数
+let _thrustPeak = 248;   // kN 显示基数 = 弹道模拟推力（248 kN），与飞行数据一致
 function updateThrustReadout(prof) {
   const F = _thrustPeak * prof;
   $('#thrustVal').textContent = `≈ ${F.toFixed(0)} kN`;
-  $('#mdotVal').textContent = `≈ ${(F / (238 * 9.81)).toFixed(1)} kg/s`;
+  // 燃气流量按固体发动机真实比冲反推（≈260s → F/2556 kg/s），满推力 ≈97 kg/s
+  $('#mdotVal').textContent = `≈ ${(F / (248e3 / 97)).toFixed(1)} kg/s`;
   $('#tbVal').textContent = `${Math.max(0, S.BURN_T - S.clock).toFixed(1)} s`;
   const bv = $('#burnVal'); bv.textContent = `${Math.round(S.clock / S.BURN_T * 100)}%`;
 }
@@ -781,12 +782,12 @@ function tickDebris(dt) {
     d.vel[i].y -= 9.8 * dt * 1.4;                            // 重力（略加重，落得快一点）
     d.vel[i].multiplyScalar(1 - dt * .32);                   // 空气阻力
     m.position.addScaledVector(d.vel[i], dt);
-    if (m.position.y <= 1.2) {                               // 落水：停住、浮着慢慢沉
-      m.position.y = 1.2;
+    if (m.position.y <= .8) {                               // 落水（海面 ≈0.16）：停住、浮着慢慢沉
+      m.position.y = .8;
       d.vel[i].set(0, 0, 0);
       m.rotation.x += d.rot[i].x * dt * .25;
       m.position.y -= dt * 0.35;                             // 微微下沉
-      if (m.position.y < .3) { m.visible = false; d.life[i] = 0; }
+      if (m.position.y < .1) { m.visible = false; d.life[i] = 0; }
     } else {
       m.rotation.x += d.rot[i].x * dt;
       m.rotation.y += d.rot[i].y * dt;
@@ -996,6 +997,7 @@ function calcCamGoal(mode, s, spd, fwd, right, up) {
       }
     }
     _camGoalUp.copy(up);
+    _camGoalPos.y = Math.max(_camGoalPos.y, 6);   // 导引头视角兜底：命中瞬间俯冲近乎垂直，别探到海面以下
     return fov;
   }
   if (mode === 'chase' || mode === 'cine') {

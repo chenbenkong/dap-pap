@@ -175,30 +175,97 @@ export function createScene(container) {
   /* ================= 飞行世界 ================= */
   const world = new THREE.Group(); world.visible = false; scene.add(world);
   {
-    // 地面（米制）
+    // 地面（米制）—— 海面之外露出的底色也按深海处理
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(80000, 80000),
-      new THREE.MeshStandardMaterial({ color: 0x06101d, metalness: .1, roughness: .95 }));
+      new THREE.MeshStandardMaterial({ color: 0x0a2733, metalness: .1, roughness: .95 }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0; ground.receiveShadow = false;
     ground.name = 'ground';
     world.add(ground);
+
+    /* ---------- 天空穹顶：Canvas 渐变（天顶深蓝 → 暖色地平霾 + 太阳光晕 + 高云） ---------- */
+    const skyW = 1024, skyH = 512;
+    const scv = document.createElement('canvas'); scv.width = skyW; scv.height = skyH;
+    const sctx = scv.getContext('2d');
+    const skyGrad = sctx.createLinearGradient(0, 0, 0, skyH);
+    skyGrad.addColorStop(0, '#1c4e86');
+    skyGrad.addColorStop(.38, '#5f9bc4');
+    skyGrad.addColorStop(.62, '#a8c8da');
+    skyGrad.addColorStop(.78, '#e8d9b8');
+    skyGrad.addColorStop(1, '#c4b39a');
+    sctx.fillStyle = skyGrad; sctx.fillRect(0, 0, skyW, skyH);
+    // 太阳（方位与主光方向一致：世界方向 (6,9,5) → 球面 u≈0.11, v≈0.24）
+    const su = .11 * skyW, sv = .24 * skyH;
+    const sg = sctx.createRadialGradient(su, sv, 0, su, sv, 170);
+    sg.addColorStop(0, 'rgba(255,253,240,1)');
+    sg.addColorStop(.1, 'rgba(255,241,208,.95)');
+    sg.addColorStop(.34, 'rgba(255,226,175,.42)');
+    sg.addColorStop(1, 'rgba(255,220,170,0)');
+    sctx.fillStyle = sg; sctx.fillRect(su - 180, sv - 180, 360, 360);
+    // 稀薄高云（几条横向柔光涂抹）
+    sctx.fillStyle = 'rgba(255,255,255,.15)';
+    for (let i = 0; i < 9; i++) {
+      const cy = 60 + Math.random() * 150, cx = Math.random() * skyW, w = 130 + Math.random() * 280;
+      sctx.beginPath(); sctx.ellipse(cx, cy, w, 9 + Math.random() * 11, 0, 0, Math.PI * 2); sctx.fill();
+    }
+    const skyTex = new THREE.CanvasTexture(scv);
+    skyTex.colorSpace = THREE.SRGBColorSpace;
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(30000, 48, 24),
+      new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false, depthWrite: false }));
+    sky.renderOrder = -10; sky.name = 'skyDome';
+    world.add(sky);
+
+    // 近岸发射岛：暗色岩土盘，发射台立其上（岛顶 y=0 与基座底齐平）
+    const land = new THREE.Mesh(new THREE.CylinderGeometry(2600, 3400, 2, 64),
+      new THREE.MeshStandardMaterial({ color: 0x2c3338, metalness: .15, roughness: .92 }));
+    land.position.y = -1;
+    world.add(land);
+
+    // 海面：半透明深蓝反射水，让下方网格透出做"战术海图"深度参考线
+    const ocean = new THREE.Mesh(new THREE.PlaneGeometry(50000, 50000),
+      new THREE.MeshPhysicalMaterial({
+        color: 0x0b425c, metalness: .6, roughness: .34,
+        transparent: true, opacity: .82, depthWrite: false, envMapIntensity: .35,
+      }));
+    ocean.rotation.x = -Math.PI / 2; ocean.position.y = .16;
+    world.add(ocean);
+
+    // 漂浮云层：扁平柔光云片（低空稀薄，不挡视线）
+    const cloudCv = document.createElement('canvas'); cloudCv.width = cloudCv.height = 128;
+    const cg = cloudCv.getContext('2d');
+    const crg = cg.createRadialGradient(64, 64, 4, 64, 64, 62);
+    crg.addColorStop(0, 'rgba(255,255,255,.8)'); crg.addColorStop(.5, 'rgba(255,255,255,.32)'); crg.addColorStop(1, 'rgba(255,255,255,0)');
+    cg.fillStyle = crg; cg.fillRect(0, 0, 128, 128);
+    const cloudTex = new THREE.CanvasTexture(cloudCv);
+    const clouds = new THREE.Group(); clouds.name = 'clouds';
+    const cMat = new THREE.MeshBasicMaterial({ map: cloudTex, transparent: true, opacity: .5, fog: false, depthWrite: false });
+    for (let i = 0; i < 14; i++) {
+      const s = 1400 + Math.random() * 2400;
+      const cl = new THREE.Mesh(new THREE.PlaneGeometry(s, s * .4), cMat);
+      cl.rotation.x = -Math.PI / 2; cl.rotation.z = Math.random() * Math.PI;
+      cl.position.set((Math.random() * 2 - 1) * 22000, 2800 + Math.random() * 4200, (Math.random() * 2 - 1) * 22000);
+      clouds.add(cl);
+    }
+    world.add(clouds);
+
     // 网格分两级：粗网格 2 km 一根看战略尺度，
     // 细网格 250 m 一根覆盖弹道走廊——跟拍距离只有几十米时，
     // 没有近处参照物就完全感觉不到速度。
+    // 两条网格都压到海面下（y≈0.06/0.08），透过半透明海面读出"海图深度线"。
     const gridPts = [], EXT = 60000, STEP = 2000;
     const mat = new THREE.LineBasicMaterial({ color: 0x16304f, transparent: true, opacity: .34 });
     for (let x = -EXT; x <= EXT; x += STEP) {
-      gridPts.push(x, .5, -EXT, x, .5, EXT);
-      gridPts.push(-EXT, .5, x, EXT, .5, x);
+      gridPts.push(x, .06, -EXT, x, .06, EXT);
+      gridPts.push(-EXT, .06, x, EXT, .06, x);
     }
     const gg = new THREE.BufferGeometry();
     gg.setAttribute('position', new THREE.Float32BufferAttribute(gridPts, 3));
     world.add(new THREE.LineSegments(gg, mat));
 
     const finePts = [], FEXT = 9000, FSTEP = 250;
-    const fineMat = new THREE.LineBasicMaterial({ color: 0x1d4a78, transparent: true, opacity: .22 });
+    const fineMat = new THREE.LineBasicMaterial({ color: 0x1d4a78, transparent: true, opacity: .2 });
     for (let x = -FEXT; x <= FEXT; x += FSTEP) {
-      finePts.push(x, .6, -FEXT, x, .6, FEXT);
-      finePts.push(-FEXT, .6, x, FEXT, .6, x);
+      finePts.push(x, .08, -FEXT, x, .08, FEXT);
+      finePts.push(-FEXT, .08, x, FEXT, .08, x);
     }
     const fg = new THREE.BufferGeometry();
     fg.setAttribute('position', new THREE.Float32BufferAttribute(finePts, 3));
@@ -351,10 +418,14 @@ export function createScene(container) {
     get camAuto() { return camAuto; },
     setWorldMode(on) {
       hangar.visible = !on; world.visible = !!on;
-      (scene.fog as THREE.FogExp2).density = on ? 0.000016 : 0.012;
+      // 世界=近海晴空：雾改成地平线霾色、浓度压到可透视量级；
+      // 机库=暗室：浓黑雾
+      const fog = scene.fog as THREE.FogExp2;
+      fog.density = on ? 0.000045 : 0.012;
+      fog.color.set(on ? 0xa9bfd2 : 0x04070d);
       key.castShadow = !on;
       if (!on) { hemi.intensity = .55; rim.intensity = 1.15; }
-      else { hemi.intensity = .32; rim.intensity = .5; }
+      else { hemi.intensity = .45; rim.intensity = .6; }
       // 飞行世界尺度为公里级：放宽相机近/远面与轨道距离限制
       camera.near = on ? 2 : .05;
       camera.far = on ? 80000 : 400;
