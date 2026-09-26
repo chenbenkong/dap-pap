@@ -401,10 +401,10 @@ export class Boom {
 export function buildShip(lenM = 150) {
   const g = new THREE.Group();
   const L = lenM;
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0x46545f, metalness: .42, roughness: .55 });
-  const deckMat = new THREE.MeshStandardMaterial({ color: 0x313e49, metalness: .35, roughness: .7 });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x222b33, metalness: .5, roughness: .5 });
-  const lightMat = new THREE.MeshStandardMaterial({ color: 0x8a99a6, metalness: .7, roughness: .35 });
+  const hullMat = new THREE.MeshStandardMaterial({ color: 0x46545f, metalness: .42, roughness: .55, emissive: 0x223244, emissiveIntensity: .32 });
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0x313e49, metalness: .35, roughness: .7, emissive: 0x1c2a3a, emissiveIntensity: .3 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x222b33, metalness: .5, roughness: .5, emissive: 0x141d28, emissiveIntensity: .3 });
+  const lightMat = new THREE.MeshStandardMaterial({ color: 0x8a99a6, metalness: .7, roughness: .35, emissive: 0x2c3d4e, emissiveIntensity: .35 });
 
   /* 船体：甲板轮廓挤出，尖艏方艉（不再是一块方盒子）。
      垂直布局基准：船体高约 L×0.061（9.5m@155m），甲板贴顶、上层建筑逐级堆高。 */

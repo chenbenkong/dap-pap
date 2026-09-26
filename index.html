@@ -3,8 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="description" content="拆开一枚导弹，跟它飞完全程。交互式导弹原理 3D 教具。">
+<meta name="description" content="拆开一枚导弹，跟它飞完全程。交互式导弹原理 3D 教具：动力、制导与钱学森弹道，一次看懂。">
+<meta name="theme-color" content="#04070d">
+<meta name="color-scheme" content="dark">
 <title>立体课本 · 导弹实验台</title>
+<!-- 社交分享卡片 -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="立体课本 · 导弹实验台">
+<meta property="og:title" content="立体课本 · 导弹实验台 — 交互式导弹原理 3D 教具">
+<meta property="og:description" content="拆开一枚导弹，跟它飞完全程：动力、制导与钱学森弹道，一次看懂。Three.js 打造，浏览器直接打开。">
+<meta property="og:url" content="https://chenbenkong.github.io/dap-pap/">
+<meta property="og:image" content="https://chenbenkong.github.io/dap-pap/docs/img/preview-detail.png">
+<meta property="og:locale" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="立体课本 · 导弹实验台 — 交互式导弹原理 3D 教具">
+<meta name="twitter:description" content="拆开一枚导弹，跟它飞完全程：动力、制导与钱学森弹道，一次看懂。">
+<meta name="twitter:image" content="https://chenbenkong.github.io/dap-pap/docs/img/preview-detail.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2304070d'/%3E%3Cpath d='M16 3 C19 8 20 13 20 18 L20 24 L12 24 L12 18 C12 13 13 8 16 3 Z' fill='%23c8d2dc'/%3E%3Cpath d='M12 20 L7 26 L12 24 Z M20 20 L25 26 L20 24 Z' fill='%23ffb454'/%3E%3Ccircle cx='16' cy='11' r='2' fill='%236fc7e8'/%3E%3C/svg%3E">
 <style>
 /* ============================================================
@@ -30,6 +44,7 @@
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
+:focus-visible{outline:2px solid rgba(255,180,84,.7);outline-offset:2px;border-radius:3px}
 body{
   background:var(--bg0);
   color:var(--ink);
@@ -70,6 +85,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   padding:22px 26px 0;pointer-events:none;
 }
 .title-block{
+  position:relative;
   max-width:560px;pointer-events:auto;
   /* 玻璃面板底：任何场景背景（亮天空/星空/炉火）下文字都保持可读 */
   background:linear-gradient(160deg,rgba(9,15,27,.78),rgba(6,11,20,.55));
@@ -77,6 +93,13 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   padding:10px 14px;backdrop-filter:blur(8px);
   box-shadow:0 8px 30px rgba(0,0,0,.35);
 }
+/* 顶部流光线：给标题块一点"通电"的仪式感 */
+.title-block::before{
+  content:"";position:absolute;top:-1px;left:14%;right:14%;height:1.5px;border-radius:2px;
+  background:linear-gradient(90deg,transparent,rgba(255,180,84,.85),transparent);
+  animation:topline 5s ease-in-out infinite;pointer-events:none;
+}
+@keyframes topline{0%,100%{opacity:.45}50%{opacity:1}}
 .plaque-mini{
   display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.32em;
   color:var(--amber);border:1px solid rgba(255,180,84,.4);
@@ -178,6 +201,21 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
   background:var(--panel);border:1px solid var(--line);border-radius:8px;
   backdrop-filter:blur(10px);box-shadow:0 14px 44px rgba(0,0,0,.45);
   transition:transform .35s cubic-bezier(.4,0,.2,1),opacity .3s;
+}
+/* HUD 四角括号：战术仪表质感（不遮内容、不拦截点击） */
+.data-panel::after,.control-desk::after{
+  content:"";position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;
+  --ck:rgba(255,180,84,.55);
+  background:
+    linear-gradient(var(--ck),var(--ck)) left 0 top 0/12px 1.5px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) left 0 top 0/1.5px 12px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) right 0 top 0/12px 1.5px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) right 0 top 0/1.5px 12px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) left 0 bottom 0/12px 1.5px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) left 0 bottom 0/1.5px 12px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) right 0 bottom 0/12px 1.5px no-repeat,
+    linear-gradient(var(--ck),var(--ck)) right 0 bottom 0/1.5px 12px no-repeat;
+  opacity:.7;
 }
 .data-panel.closed{transform:translateX(calc(100% + 26px));opacity:0;pointer-events:none}
 .panel-head{
@@ -393,6 +431,24 @@ h1{font-size:clamp(19px,2.4vw,27px);font-weight:700;letter-spacing:.02em;line-he
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
   transition:opacity .7s ease;opacity:1;
 }
+/* 蓝图网格 + 顶部光晕：装配中的"图纸"氛围 */
+#loader::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(111,199,232,.055) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(111,199,232,.055) 1px,transparent 1px);
+  background-size:44px 44px;
+  -webkit-mask-image:radial-gradient(640px 460px at 50% 44%,#000 25%,transparent 78%);
+  mask-image:radial-gradient(640px 460px at 50% 44%,#000 25%,transparent 78%);
+}
+/* 缓慢扫过的横向扫描线 */
+#loader::after{
+  content:"";position:absolute;left:0;right:0;height:120px;pointer-events:none;
+  background:linear-gradient(180deg,transparent,rgba(111,199,232,.06) 55%,rgba(255,180,84,.10) 80%,transparent);
+  animation:ldScan 3.2s ease-in-out infinite;
+}
+@keyframes ldScan{0%{top:-16%}55%,100%{top:106%}}
+@media (prefers-reduced-motion:reduce){#loader::after{animation:none;opacity:0}}
 #loader.done{opacity:0;pointer-events:none}
 .ld-mark{width:74px;height:74px;position:relative;animation:ldSpin 2.6s linear infinite}
 @keyframes ldSpin{to{transform:rotate(360deg)}}

@@ -43,7 +43,26 @@ export function createScene(container) {
 
   /* ---------- 环境 IBL ---------- */
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), .04).texture;
+  const hangarEnv = pmrem.fromScene(new RoomEnvironment(renderer), .04).texture;
+  scene.environment = hangarEnv;
+  /* 夜间试验场专用 IBL：暗夜空 + 月光亮斑（方位与主光一致 (6,9,5)）。
+     否则白昼级 RoomEnvironment 会让深夜场景金属件泛白、失去夜间观测对比度。 */
+  const nightEnv = (() => {
+    const es = new THREE.Scene();
+    es.background = new THREE.Color(0x04070e);
+    const moon = new THREE.Mesh(
+      new THREE.SphereGeometry(4, 16, 8),
+      new THREE.MeshBasicMaterial({ color: 0xbdd3f6 })
+    );
+    moon.position.set(30, 45, 25); es.add(moon);
+    // 地平线一圈极弱的冷色微光（模拟海面散射），让金属下缘不死黑
+    const haze = new THREE.Mesh(
+      new THREE.SphereGeometry(50, 24, 12),
+      new THREE.MeshBasicMaterial({ color: 0x0c1a2c, side: THREE.BackSide })
+    );
+    es.add(haze);
+    return pmrem.fromScene(es, .05).texture;
+  })();
 
   /* ---------- 后期处理链：Bloom（尾焰/琥珀辉光）+ 输出变换 + FXAA ---------- */
   const composer = new EffectComposer(renderer);
@@ -101,7 +120,7 @@ export function createScene(container) {
     };
     ASSEMBLY_TEX = mkDome((c) => {
       const g = c.createLinearGradient(0, 0, 0, domeH);
-      g.addColorStop(0, '#0c0920'); g.addColorStop(.5, '#241b4d'); g.addColorStop(.82, '#4b2f74'); g.addColorStop(1, '#14102c');
+      g.addColorStop(0, '#0a081d'); g.addColorStop(.5, '#241b4d'); g.addColorStop(.82, '#4b2f74'); g.addColorStop(1, '#14102c');
       c.fillStyle = g; c.fillRect(0, 0, domeW, domeH);
       const neb = (x, y, r, col) => {
         const rg = c.createRadialGradient(x, y, 0, x, y, r);
@@ -111,10 +130,42 @@ export function createScene(container) {
       neb(domeW * .2, domeH * .42, 190, 'rgba(120,90,255,.20)');
       neb(domeW * .75, domeH * .30, 240, 'rgba(60,190,255,.14)');
       neb(domeW * .55, domeH * .62, 170, 'rgba(255,120,220,.10)');
-      for (let i = 0; i < 320; i++) {
-        const x = Math.random() * domeW, y = Math.random() * domeH * .9, r = Math.random();
-        c.fillStyle = r > .97 ? 'rgba(255,255,255,.95)' : `rgba(255,255,255,${.18 + Math.random() * .5})`;
-        c.beginPath(); c.arc(x, y, r > .97 ? 1.6 : .7, 0, 7); c.fill();
+      neb(domeW * .38, domeH * .22, 150, 'rgba(90,140,255,.12)');
+      // 斜向银河带：让星空有纵深与方向感
+      const band = c.createLinearGradient(0, domeH * .8, domeW, domeH * .08);
+      band.addColorStop(0, 'rgba(0,0,0,0)'); band.addColorStop(.28, 'rgba(130,140,255,.05)');
+      band.addColorStop(.5, 'rgba(185,205,255,.10)'); band.addColorStop(.72, 'rgba(130,140,255,.05)');
+      band.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = band; c.fillRect(0, 0, domeW, domeH);
+      // 星点三档：远景微星 / 中景星 / 近景亮星带十字星芒与色温差
+      const starCols = ['255,255,255', '190,214,255', '255,226,188', '188,255,238'];
+      for (let i = 0; i < 300; i++) {
+        const x = Math.random() * domeW, y = Math.random() * domeH * .88;
+        c.fillStyle = `rgba(255,255,255,${.10 + Math.random() * .30})`;
+        c.beginPath(); c.arc(x, y, .55, 0, 7); c.fill();
+      }
+      for (let i = 0; i < 110; i++) {
+        const x = Math.random() * domeW, y = Math.random() * domeH * .85;
+        const col = starCols[(Math.random() * starCols.length) | 0];
+        c.fillStyle = `rgba(${col},${.45 + Math.random() * .4})`;
+        c.beginPath(); c.arc(x, y, .8 + Math.random() * .5, 0, 7); c.fill();
+      }
+      for (let i = 0; i < 22; i++) {
+        const x = Math.random() * domeW, y = Math.random() * domeH * .8;
+        const col = starCols[(Math.random() * starCols.length) | 0];
+        c.save();
+        c.shadowBlur = 7; c.shadowColor = `rgba(${col},.9)`;
+        c.fillStyle = `rgba(${col},.95)`;
+        c.beginPath(); c.arc(x, y, 1.3 + Math.random() * .6, 0, 7); c.fill();
+        c.restore();
+        // 十字星芒（只给最亮的几颗）
+        if (i % 3 === 0) {
+          c.strokeStyle = `rgba(${col},.32)`; c.lineWidth = .7;
+          c.beginPath();
+          c.moveTo(x - 4.6, y); c.lineTo(x + 4.6, y);
+          c.moveTo(x, y - 4.6); c.lineTo(x, y + 4.6);
+          c.stroke();
+        }
       }
       const gl = c.createRadialGradient(domeW * .5, domeH * .66, 0, domeW * .5, domeH * .66, 260);
       gl.addColorStop(0, 'rgba(150,190,255,.16)'); gl.addColorStop(1, 'rgba(0,0,0,0)');
@@ -122,16 +173,35 @@ export function createScene(container) {
     });
     BENCH_TEX = mkDome((c) => {
       const g = c.createLinearGradient(0, 0, 0, domeH);
-      g.addColorStop(0, '#120b07'); g.addColorStop(.6, '#2a1208'); g.addColorStop(.88, '#5a2410'); g.addColorStop(1, '#180b05');
+      g.addColorStop(0, '#0e0906'); g.addColorStop(.6, '#2a1208'); g.addColorStop(.88, '#61280f'); g.addColorStop(1, '#180b05');
       c.fillStyle = g; c.fillRect(0, 0, domeW, domeH);
+      // 炉心辉光：双层（内白热 / 外橙红）
       const fg = c.createRadialGradient(domeW * .5, domeH * .98, 0, domeW * .5, domeH * .98, 300);
-      fg.addColorStop(0, 'rgba(255,150,60,.34)'); fg.addColorStop(.5, 'rgba(255,90,30,.14)'); fg.addColorStop(1, 'rgba(0,0,0,0)');
+      fg.addColorStop(0, 'rgba(255,168,72,.40)'); fg.addColorStop(.5, 'rgba(255,90,30,.15)'); fg.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = fg; c.fillRect(0, 0, domeW, domeH);
-      for (let i = 0; i < 180; i++) {
-        const x = Math.random() * domeW, y = domeH * (.55 + Math.random() * .45);
-        c.fillStyle = `rgba(255,${120 + Math.random() * 120 | 0},40,${.25 + Math.random() * .5})`;
-        c.beginPath(); c.arc(x, y, .5 + Math.random() * 1.1, 0, 7); c.fill();
+      const fg2 = c.createRadialGradient(domeW * .5, domeH * 1.04, 0, domeW * .5, domeH * 1.04, 150);
+      fg2.addColorStop(0, 'rgba(255,228,180,.30)'); fg2.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = fg2; c.fillRect(0, 0, domeW, domeH);
+      // 两侧远处结构剪影：竖向热流暗带，给机库纵深
+      for (let i = 0; i < 7; i++) {
+        const x = Math.random() * domeW, w = 26 + Math.random() * 60;
+        const vg = c.createLinearGradient(0, domeH * .35, 0, domeH);
+        vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(10,4,2,.42)');
+        c.fillStyle = vg;
+        c.fillRect(x, domeH * .35, w, domeH * .65);
       }
+      // 火星：带辉光的暖色粒子，上密下疏
+      c.save();
+      for (let i = 0; i < 230; i++) {
+        const x = Math.random() * domeW, y = domeH * (.5 + Math.random() * .5);
+        const hot = Math.random();
+        c.shadowBlur = hot > .8 ? 6 : 0;
+        c.shadowColor = 'rgba(255,170,60,.9)';
+        c.fillStyle = `rgba(255,${120 + hot * 120 | 0},40,${.25 + hot * .55})`;
+        c.beginPath(); c.arc(x, y, .5 + hot * 1.2, 0, 7); c.fill();
+      }
+      c.restore();
+      // 蒸汽带
       c.fillStyle = 'rgba(255,200,150,.05)';
       for (let i = 0; i < 5; i++) { const y = Math.random() * domeH * .5; c.fillRect(0, y, domeW, 14 + Math.random() * 26); }
     });
@@ -230,49 +300,71 @@ export function createScene(container) {
   /* ================= 飞行世界 ================= */
   const world = new THREE.Group(); world.visible = false; scene.add(world);
   {
-    // 地面（米制）—— 海面之外露出的底色也按深海处理
+    // 地面（米制）—— 海面之外露出的底色也按深夜海床处理
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(80000, 80000),
-      new THREE.MeshStandardMaterial({ color: 0x0a2733, metalness: .1, roughness: .95 }));
+      new THREE.MeshStandardMaterial({ color: 0x081b26, metalness: .1, roughness: .95 }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0; ground.receiveShadow = false;
     ground.name = 'ground';
     world.add(ground);
 
-    /* ---------- 天空穹顶：Canvas 渐变（天顶深蓝 → 暖色地平霾 + 太阳光晕 + 高云） ---------- */
+    /* ---------- 天空穹顶：深夜试验场（月光 + 星空 + 暗霾地平线） ----------
+       夜暗环境 = 高对比背景，白色羽流/尾迹与弹道一目了然，
+       符合真实夜间靶试的仪器化观测条件。 */
     const skyW = 1024, skyH = 512;
     const scv = document.createElement('canvas'); scv.width = skyW; scv.height = skyH;
     const sctx = scv.getContext('2d');
     const skyGrad = sctx.createLinearGradient(0, 0, 0, skyH);
-    skyGrad.addColorStop(0, '#1c4e86');
-    skyGrad.addColorStop(.38, '#5f9bc4');
-    skyGrad.addColorStop(.62, '#a8c8da');
-    skyGrad.addColorStop(.78, '#e8d9b8');
-    skyGrad.addColorStop(1, '#c4b39a');
+    skyGrad.addColorStop(0, '#040a14');
+    skyGrad.addColorStop(.42, '#0a1830');
+    skyGrad.addColorStop(.68, '#122a44');
+    skyGrad.addColorStop(.84, '#1b3a56');
+    skyGrad.addColorStop(1, '#0d1e30');
     sctx.fillStyle = skyGrad; sctx.fillRect(0, 0, skyW, skyH);
-    // 星点（高空）+ 星云色带（科幻晨光质感，不必写实）
-    sctx.fillStyle = 'rgba(255,255,255,.85)';
-    for (let i = 0; i < 90; i++) {
-      const sx = Math.random() * skyW, sy = Math.random() * skyH * .42;
-      sctx.beginPath(); sctx.arc(sx, sy, Math.random() > .96 ? 1.6 : .6, 0, 7); sctx.fill();
+    // 地平线上一线极淡的月光霾（区分海天边界，不抬高整体亮度）
+    const hzg = sctx.createLinearGradient(0, skyH * .74, 0, skyH);
+    hzg.addColorStop(0, 'rgba(90,130,170,0)'); hzg.addColorStop(.82, 'rgba(90,130,170,.10)'); hzg.addColorStop(1, 'rgba(90,130,170,0)');
+    sctx.fillStyle = hzg; sctx.fillRect(0, skyH * .74, skyW, skyH * .26);
+    // 斜向银河淡带（远景纵深）
+    const band = sctx.createLinearGradient(0, skyH * .8, skyW, skyH * .1);
+    band.addColorStop(0, 'rgba(0,0,0,0)'); band.addColorStop(.3, 'rgba(110,140,190,.045)');
+    band.addColorStop(.55, 'rgba(140,165,205,.075)'); band.addColorStop(.8, 'rgba(110,140,190,.045)');
+    band.addColorStop(1, 'rgba(0,0,0,0)');
+    sctx.fillStyle = band; sctx.fillRect(0, 0, skyW, skyH);
+    // 星点三档（夜间观测环境：星越多，"靶场深夜"氛围越足）
+    const starCols = ['255,255,255', '185,212,255', '255,230,195'];
+    for (let i = 0; i < 300; i++) {
+      const sx = Math.random() * skyW, sy = Math.random() * skyH * .86;
+      sctx.fillStyle = `rgba(255,255,255,${.08 + Math.random() * .22})`;
+      sctx.beginPath(); sctx.arc(sx, sy, .55, 0, 7); sctx.fill();
     }
-    const nb1 = sctx.createRadialGradient(skyW * .78, skyH * .22, 0, skyW * .78, skyH * .22, 220);
-    nb1.addColorStop(0, 'rgba(90,190,255,.16)'); nb1.addColorStop(1, 'rgba(0,0,0,0)');
-    sctx.fillStyle = nb1; sctx.fillRect(skyW * .78 - 240, skyH * .22 - 240, 480, 480);
-    const nb2 = sctx.createRadialGradient(skyW * .14, skyH * .34, 0, skyW * .14, skyH * .34, 260);
-    nb2.addColorStop(0, 'rgba(210,130,255,.12)'); nb2.addColorStop(1, 'rgba(0,0,0,0)');
-    sctx.fillStyle = nb2; sctx.fillRect(skyW * .14 - 280, skyH * .34 - 280, 560, 560);
-    // 太阳（方位与主光方向一致：世界方向 (6,9,5) → 球面 u≈0.11, v≈0.24）
-    const su = .11 * skyW, sv = .24 * skyH;
-    const sg = sctx.createRadialGradient(su, sv, 0, su, sv, 170);
-    sg.addColorStop(0, 'rgba(255,253,240,1)');
-    sg.addColorStop(.1, 'rgba(255,241,208,.95)');
-    sg.addColorStop(.34, 'rgba(255,226,175,.42)');
-    sg.addColorStop(1, 'rgba(255,220,170,0)');
-    sctx.fillStyle = sg; sctx.fillRect(su - 180, sv - 180, 360, 360);
-    // 稀薄高云（几条横向柔光涂抹）
-    sctx.fillStyle = 'rgba(255,255,255,.15)';
-    for (let i = 0; i < 9; i++) {
-      const cy = 60 + Math.random() * 150, cx = Math.random() * skyW, w = 130 + Math.random() * 280;
-      sctx.beginPath(); sctx.ellipse(cx, cy, w, 9 + Math.random() * 11, 0, 0, Math.PI * 2); sctx.fill();
+    for (let i = 0; i < 95; i++) {
+      const sx = Math.random() * skyW, sy = Math.random() * skyH * .8;
+      const col = starCols[(Math.random() * starCols.length) | 0];
+      sctx.fillStyle = `rgba(${col},${.4 + Math.random() * .35})`;
+      sctx.beginPath(); sctx.arc(sx, sy, .7 + Math.random() * .5, 0, 7); sctx.fill();
+    }
+    for (let i = 0; i < 18; i++) {
+      const sx = Math.random() * skyW, sy = Math.random() * skyH * .72;
+      const col = starCols[(Math.random() * starCols.length) | 0];
+      sctx.save(); sctx.shadowBlur = 6; sctx.shadowColor = `rgba(${col},.85)`;
+      sctx.fillStyle = `rgba(${col},.95)`;
+      sctx.beginPath(); sctx.arc(sx, sy, 1.1 + Math.random() * .5, 0, 7); sctx.fill();
+      sctx.restore();
+    }
+    // 月亮：方位与主光方向一致（世界方向 (6,9,5) → u≈0.11, v≈0.24），冷白小盘 + 紧致月晕
+    const mu = .11 * skyW, mv = .24 * skyH;
+    const mg = sctx.createRadialGradient(mu, mv, 0, mu, mv, 110);
+    mg.addColorStop(0, 'rgba(226,238,255,.95)');
+    mg.addColorStop(.055, 'rgba(226,238,255,.9)');
+    mg.addColorStop(.11, 'rgba(190,214,245,.30)');
+    mg.addColorStop(.4, 'rgba(160,195,235,.10)');
+    mg.addColorStop(1, 'rgba(150,190,235,0)');
+    sctx.fillStyle = mg; sctx.fillRect(mu - 120, mv - 120, 240, 240);
+    // 高空稀薄夜云（近地平线几缕暗纹，几乎不可见）
+    sctx.fillStyle = 'rgba(120,150,190,.05)';
+    for (let i = 0; i < 8; i++) {
+      const cy = skyH * (.6 + Math.random() * .22), cx = Math.random() * skyW, w = 140 + Math.random() * 260;
+      sctx.beginPath(); sctx.ellipse(cx, cy, w, 6 + Math.random() * 8, 0, 0, Math.PI * 2); sctx.fill();
     }
     const skyTex = new THREE.CanvasTexture(scv);
     skyTex.colorSpace = THREE.SRGBColorSpace;
@@ -281,22 +373,49 @@ export function createScene(container) {
     sky.renderOrder = -10; sky.name = 'skyDome';
     world.add(sky);
 
-    // 近岸发射岛：暗色岩土盘，发射台立其上（岛顶 y=0 与基座底齐平）
+    // 近岸发射岛：深夜岩土盘（剪影级暗度，月光下略可辨），发射台立其上（岛顶 y=0 与基座底齐平）
     const land = new THREE.Mesh(new THREE.CylinderGeometry(2600, 3400, 2, 64),
-      new THREE.MeshStandardMaterial({ color: 0x2c3338, metalness: .15, roughness: .92 }));
+      new THREE.MeshStandardMaterial({ color: 0x141a21, metalness: .15, roughness: .92 }));
     land.position.y = -1;
     world.add(land);
 
-    // 海面：半透明深蓝反射水，让下方网格透出做"战术海图"深度参考线
+    // 海面：深夜墨蓝反射水，让下方网格透出做"海图深度线"
     const ocean = new THREE.Mesh(new THREE.PlaneGeometry(50000, 50000),
       new THREE.MeshPhysicalMaterial({
-        color: 0x0b425c, metalness: .6, roughness: .34,
-        transparent: true, opacity: .82, depthWrite: false, envMapIntensity: .35,
+        color: 0x092338, metalness: .55, roughness: .34,
+        transparent: true, opacity: .84, depthWrite: false, envMapIntensity: .3,
       }));
     ocean.rotation.x = -Math.PI / 2; ocean.position.y = .16;
     world.add(ocean);
 
-    // 漂浮云层：扁平柔光云片（低空稀薄，不挡视线）
+    // 月光碎辉：沿月亮方位铺一条很弱的冷色光带（仪器化夜试氛围，
+    // 亮度刻意压低——绝不能干扰弹道/尾迹观察）
+    {
+      const gzCv = document.createElement('canvas'); gzCv.width = gzCv.height = 256;
+      const gzc = gzCv.getContext('2d');
+      const gzg = gzc.createRadialGradient(128, 128, 6, 128, 128, 126);
+      gzg.addColorStop(0, 'rgba(205,225,252,.55)');
+      gzg.addColorStop(.4, 'rgba(185,210,245,.18)');
+      gzg.addColorStop(1, 'rgba(175,205,245,0)');
+      gzc.fillStyle = gzg; gzc.fillRect(0, 0, 256, 256);
+      const gzTex = new THREE.CanvasTexture(gzCv);
+      // 月亮方位：穹顶贴图 u≈0.11 → 世界方位角 atan2(z,x)≈0.695 rad
+      const az = .695, gzDist = 13000;
+      const glitter = new THREE.Mesh(
+        new THREE.PlaneGeometry(3400, 30000),
+        new THREE.MeshBasicMaterial({
+          map: gzTex, color: 0xcfe2ff, transparent: true, opacity: .11,
+          blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+        })
+      );
+      glitter.rotation.x = -Math.PI / 2;
+      glitter.rotation.z = -az;   // 平面长轴对准月亮方位
+      glitter.position.set(Math.cos(az) * gzDist, .3, Math.sin(az) * gzDist);
+      glitter.renderOrder = 2;    // 画在海面之后
+      world.add(glitter);
+    }
+
+    // 漂浮云层：扁平柔光夜云（月光下极淡，绝不遮挡弹道视线）
     const cloudCv = document.createElement('canvas'); cloudCv.width = cloudCv.height = 128;
     const cg = cloudCv.getContext('2d');
     const crg = cg.createRadialGradient(64, 64, 4, 64, 64, 62);
@@ -304,7 +423,7 @@ export function createScene(container) {
     cg.fillStyle = crg; cg.fillRect(0, 0, 128, 128);
     const cloudTex = new THREE.CanvasTexture(cloudCv);
     const clouds = new THREE.Group(); clouds.name = 'clouds';
-    const cMat = new THREE.MeshBasicMaterial({ map: cloudTex, transparent: true, opacity: .5, fog: false, depthWrite: false });
+    const cMat = new THREE.MeshBasicMaterial({ map: cloudTex, color: 0x9db4d6, transparent: true, opacity: .15, fog: false, depthWrite: false });
     for (let i = 0; i < 14; i++) {
       const s = 1400 + Math.random() * 2400;
       const cl = new THREE.Mesh(new THREE.PlaneGeometry(s, s * .4), cMat);
@@ -317,9 +436,10 @@ export function createScene(container) {
     // 网格分两级：粗网格 2 km 一根看战略尺度，
     // 细网格 250 m 一根覆盖弹道走廊——跟拍距离只有几十米时，
     // 没有近处参照物就完全感觉不到速度。
-    // 两条网格都压到海面下（y≈0.06/0.08），透过半透明海面读出"海图深度线"。
+    // 两条网格都压到海面下（y≈0.06/0.08），透过半透明海面读出"仪器化靶场海图线"；
+    // 夜试环境下略提亮度：网格是深度参照，不是装饰。
     const gridPts = [], EXT = 60000, STEP = 2000;
-    const mat = new THREE.LineBasicMaterial({ color: 0x16304f, transparent: true, opacity: .34 });
+    const mat = new THREE.LineBasicMaterial({ color: 0x1c3c62, transparent: true, opacity: .42 });
     for (let x = -EXT; x <= EXT; x += STEP) {
       gridPts.push(x, .06, -EXT, x, .06, EXT);
       gridPts.push(-EXT, .06, x, EXT, .06, x);
@@ -329,7 +449,7 @@ export function createScene(container) {
     world.add(new THREE.LineSegments(gg, mat));
 
     const finePts = [], FEXT = 9000, FSTEP = 250;
-    const fineMat = new THREE.LineBasicMaterial({ color: 0x1d4a78, transparent: true, opacity: .2 });
+    const fineMat = new THREE.LineBasicMaterial({ color: 0x24568c, transparent: true, opacity: .27 });
     for (let x = -FEXT; x <= FEXT; x += FSTEP) {
       finePts.push(x, .08, -FEXT, x, .08, FEXT);
       finePts.push(-FEXT, .08, x, FEXT, .08, x);
@@ -427,6 +547,28 @@ export function createScene(container) {
 
   /* ---------- 每帧更新 ---------- */
   const shake = { amp: 0 };
+  /* ---------- 自适应像素比 ----------
+     帧时间持续超限（低端机/开 bloom 的高分屏）时逐步下调渲染分辨率，
+     流畅时再逐步回升；每 1.2s 才评估一次，避免来回抖动。 */
+  const DPR_MAX = Math.min(devicePixelRatio || 1, 2), DPR_MIN = 1;
+  let dprCur = DPR_MAX, _emaMs = 16.7, _dprAcc = 0;
+  function adaptDpr(dtMs) {
+    _emaMs = _emaMs * .94 + dtMs * .06;
+    _dprAcc += dtMs;
+    if (_dprAcc < 1200) return;
+    _dprAcc = 0;
+    if (_emaMs > 25 && dprCur > DPR_MIN) {
+      dprCur = Math.max(DPR_MIN, dprCur - .25);
+      renderer.setPixelRatio(dprCur);
+      composer.setPixelRatio(dprCur);
+      syncPost();
+    } else if (_emaMs < 15 && dprCur < DPR_MAX) {
+      dprCur = Math.min(DPR_MAX, dprCur + .25);
+      renderer.setPixelRatio(dprCur);
+      composer.setPixelRatio(dprCur);
+      syncPost();
+    }
+  }
   function update(dt, controlsEnabled = true) {
     controls.enabled = !camAuto && controlsEnabled;
     if (camAuto) {
@@ -440,6 +582,7 @@ export function createScene(container) {
         shake.amp *= Math.exp(-dt * 4.2);
       }
       colorGradePass.material.uniforms['uTime'].value = performance.now() * 0.001;
+      adaptDpr(dt * 1000);
       composer.render();
       return;
     }
@@ -466,6 +609,7 @@ export function createScene(container) {
       dust.position.y = Math.sin(performance.now() * .00022) * .18;
     }
     colorGradePass.material.uniforms['uTime'].value = performance.now() * 0.001;
+    adaptDpr(dt * 1000);
     composer.render();
   }
 
@@ -487,14 +631,27 @@ export function createScene(container) {
     get camAuto() { return camAuto; },
     setWorldMode(on) {
       hangar.visible = !on; world.visible = !!on;
-      // 世界=近海晴空：雾改成地平线霾色、浓度压到可透视量级；
+      // 深夜试验场：雾改成暗海军蓝霾色、浓度压到可透视量级；
       // 机库=暗室：浓黑雾
       const fog = scene.fog as THREE.FogExp2;
-      fog.density = on ? 0.000045 : 0.012;
-      fog.color.set(on ? 0xd3c7b0 : 0x04070d);   // 世界=近海晨光暖霾（与地平线同色系）
+      fog.density = on ? 0.000052 : 0.012;
+      fog.color.set(on ? 0x0a1424 : 0x04070d);   // 世界=夜间月光霾（与天穹地平线同色系）
+      scene.environment = on ? nightEnv : hangarEnv;   // IBL 同步切换：夜空月光 / 机库白光
       key.castShadow = !on;
-      if (!on) { hemi.intensity = .55; rim.intensity = 1.15; }
-      else { hemi.intensity = .45; rim.intensity = .6; }
+      if (!on) {
+        // 机库（白昼级工程照明）
+        hemi.intensity = .55; rim.intensity = 1.15;
+        key.intensity = 1.75; key.color.set(0xffe7c2);
+        fill.intensity = .5;
+        renderer.toneMappingExposure = 1.06;
+      } else {
+        // 世界（真实夜间靶试照明规格：弱月光环境光 + 冷色月面主光 + 较强冷色轮廓光）
+        // 环境压暗 = 白色羽流/尾迹在暗背景上高对比，弹道一目了然
+        hemi.intensity = .30; rim.intensity = 1.05;
+        key.intensity = .52; key.color.set(0xbfd4ff);   // 主光转冷月光（方位不变，与天穹月亮对齐）
+        fill.intensity = .0;
+        renderer.toneMappingExposure = 1.0;
+      }
       // 飞行世界尺度为公里级：放宽相机近/远面与轨道距离限制
       camera.near = on ? 2 : .05;
       camera.far = on ? 80000 : 400;
